@@ -1,5 +1,6 @@
 # workflow/run_workflow.py
 import json
+import logging
 import runpy
 from pathlib import Path
 from typing import Optional
@@ -10,6 +11,8 @@ from .aggregation import aggregate_records
 from .compliance import run_compliance_checks
 from .genai_agents import interpretation_agent, risk_analysis_agent, report_writer_agent
 from .reporting import create_summary_charts, generate_html_report, generate_pdf_report
+
+logger = logging.getLogger(__name__)
 
 
 def process_repository(base_dir: Optional[str] = None, repo_dir: Optional[str] = None, output_dir: Optional[str] = None):
@@ -43,19 +46,19 @@ def process_repository(base_dir: Optional[str] = None, repo_dir: Optional[str] =
     for index, fi in enumerate(files, start=1):
         dept = fi.get("department") or "Unknown"
         path = fi.get("path")
-        print(f"\nProcessing file {index}/{len(files)}: department={dept} file={path}")
+        logger.debug("Processing file %d/%d: department=%s file=%s", index, len(files), dept, path)
 
-        print("  Stage: extraction")
+        logger.debug("Stage: extraction")
         raw_doc = extract_record(fi)
         if not raw_doc:
-            print("  Skipping file: extraction returned no data")
+            logger.warning("Skipping file because extraction returned no data: %s", path)
             continue
 
-        print("  Stage: interpretation")
+        logger.debug("Stage: interpretation")
         try:
             interp = interpretation_agent(raw_doc)
         except Exception as exc:
-            print(f"  Interpretation agent failed: {exc}")
+            logger.warning("Interpretation agent failed for %s: %s", path, exc)
             interp = {
                 "department": "Other",
                 "period": None,
@@ -67,9 +70,11 @@ def process_repository(base_dir: Optional[str] = None, repo_dir: Optional[str] =
 
         conf_val = interp.get("confidence", None)
         conf_display = conf_val if conf_val is not None else "N/A"
-        print(
-            f"  Interpretation complete: department={interp.get('department', 'Other')} "
-            f"period={interp.get('period', 'Unknown')} confidence={conf_display}"
+        logger.debug(
+            "Interpretation complete: department=%s period=%s confidence=%s",
+            interp.get('department', 'Other'),
+            interp.get('period', 'Unknown'),
+            conf_display,
         )
 
         record = {
