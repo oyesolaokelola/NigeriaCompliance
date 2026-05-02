@@ -4,12 +4,12 @@ import runpy
 from pathlib import Path
 from typing import Optional
 
-from ingestion import discover_files
-from extraction import extract_record
-from aggregation import aggregate_records
-from compliance import run_compliance_checks
-from genai_agents import interpretation_agent, risk_analysis_agent, report_writer_agent
-from reporting import create_summary_charts, generate_html_report, generate_pdf_report
+from .ingestion import discover_files
+from .extraction import extract_record
+from .aggregation import aggregate_records
+from .compliance import run_compliance_checks
+from .genai_agents import interpretation_agent, risk_analysis_agent, report_writer_agent
+from .reporting import create_summary_charts, generate_html_report, generate_pdf_report
 
 
 def process_repository(base_dir: Optional[str] = None, repo_dir: Optional[str] = None, output_dir: Optional[str] = None):

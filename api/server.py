@@ -11,11 +11,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-try:
-    from workflow.run_workflow import process_repository
-except Exception:
-    # fallback if executed from within the workflow package
-    from run_workflow import process_repository
+from workflow.run_workflow import process_repository
 
 app = FastAPI(title="NigeriaCompliance POC API")
 
