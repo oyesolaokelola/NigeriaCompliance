@@ -1,0 +1,14 @@
+pandas
+python-docx
+pdfplumber
+pytesseract
+Pillow
+matplotlib
+reportlab
+openpyxl
+xlsxwriter
+openai
+fastapi
+uvicorn[standard]
+python-multipart
+requests
