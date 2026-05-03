@@ -5,6 +5,9 @@ import os
 import sys
 import uuid
 import json
+import threading
+import time
+from datetime import datetime
 from pathlib import Path
 
 # Ensure project root is importable
@@ -34,6 +37,59 @@ OUTPUT_DIR = BASE_DIR / "output"
 REPO_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+PROCESS_LOCK = threading.Lock()
+PROCESS_STATUS = {
+    "running": False,
+    "last_started": None,
+    "last_finished": None,
+    "last_error": None,
+    "last_error_type": None,
+    "last_message": None,
+}
+
+
+def _update_status(**kwargs):
+    with PROCESS_LOCK:
+        PROCESS_STATUS.update(kwargs)
+
+
+def _start_background_process():
+    with PROCESS_LOCK:
+        if PROCESS_STATUS["running"]:
+            return False
+        PROCESS_STATUS.update(
+            {
+                "running": True,
+                "last_started": datetime.utcnow().isoformat() + "Z",
+                "last_finished": None,
+                "last_error": None,
+                "last_error_type": None,
+                "last_message": "Processing started",
+            }
+        )
+
+    def _target():
+        try:
+            result = process_repository()
+            _update_status(
+                last_finished=datetime.utcnow().isoformat() + "Z",
+                last_message="Processing completed successfully",
+            )
+            return result
+        except Exception as exc:
+            _update_status(
+                last_finished=datetime.utcnow().isoformat() + "Z",
+                last_error=str(exc),
+                last_error_type=type(exc).__name__,
+                last_message="Processing failed",
+            )
+        finally:
+            _update_status(running=False)
+
+    thread = threading.Thread(target=_target, daemon=True)
+    thread.start()
+    return True
+
 
 @app.get("/")
 def root():
@@ -43,8 +99,13 @@ def root():
             "/health",
             "/upload",
             "/process",
+            "/process/status",
             "/aggregated",
             "/artifact/{filename}",
+            "/debug/files",
+            "/debug/test-extraction",
+            "/debug/env",
+            "/debug/output",
         ],
         "note": "Use the Railway service URL with these endpoints. POST /upload and POST /process are the main workflow actions.",
     }
@@ -158,34 +219,33 @@ def debug_output():
 
 @app.post("/process")
 def process_endpoint():
-    try:
-        res = process_repository()
-        base_url = os.getenv("BASE_URL", "").rstrip("/")
-
-        def make_url(p):
-            if not p:
-                return None
-            if base_url:
-                return f"{base_url}/artifact/{Path(p).name}"
-            return str(p)
-
+    started = _start_background_process()
+    if not started:
         return {
             "success": True,
-            "aggregated": res.get("aggregated"),
-            "status": res.get("status"),
-            "issues": res.get("issues"),
-            "html_report": make_url(res.get("html_report")),
-            "pdf_report": make_url(res.get("pdf_report")),
-            "aggregated_json": make_url(res.get("aggregated_json")),
+            "message": "Processing is already running.",
+            "running": True,
         }
-    except Exception as exc:
-        import traceback
+
+    return {
+        "success": True,
+        "message": "Processing started in the background.",
+        "running": True,
+        "status_url": "/process/status",
+        "aggregated_url": "/aggregated",
+    }
+
+
+@app.get("/process/status")
+def process_status():
+    with PROCESS_LOCK:
         return {
-            "success": False,
-            "error": str(exc),
-            "error_type": type(exc).__name__,
-            "traceback": traceback.format_exc(),
-            "hint": "Check /debug/files and /debug/test-extraction for more details"
+            "running": PROCESS_STATUS["running"],
+            "last_started": PROCESS_STATUS["last_started"],
+            "last_finished": PROCESS_STATUS["last_finished"],
+            "last_error": PROCESS_STATUS["last_error"],
+            "last_error_type": PROCESS_STATUS["last_error_type"],
+            "last_message": PROCESS_STATUS["last_message"],
         }
 
 
