@@ -35,6 +35,21 @@ REPO_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 
+@app.get("/")
+def root():
+    return {
+        "message": "NigeriaCompliance API is running.",
+        "endpoints": [
+            "/health",
+            "/upload",
+            "/process",
+            "/aggregated",
+            "/artifact/{filename}",
+        ],
+        "note": "Use the Railway service URL with these endpoints. POST /upload and POST /process are the main workflow actions.",
+    }
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
