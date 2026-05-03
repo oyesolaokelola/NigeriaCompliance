@@ -49,6 +49,44 @@ async function triggerProcess() {
   return response.json();
 }
 
+async function getProcessStatus() {
+  if (!API_BASE_URL) {
+    throw new Error('API_BASE_URL is not configured.');
+  }
+
+  const response = await fetch(`${API_BASE_URL}/process/status`, {
+    method: 'GET',
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Process status failed: ${response.status} ${errorText}`);
+  }
+
+  return response.json();
+}
+
+async function triggerProcessAndWait({ intervalMs = 2000, timeoutMs = 180000 } = {}) {
+  const res = await triggerProcess();
+  if (!res.success) {
+    throw new Error(`Process start failed: ${res.message || 'unknown error'}`);
+  }
+
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    const status = await getProcessStatus();
+    if (!status.running) {
+      if (status.last_error) {
+        throw new Error(`Processing failed: ${status.last_error_type} ${status.last_error}`);
+      }
+      return status;
+    }
+  }
+
+  throw new Error('Processing timed out waiting for completion.');
+}
+
 async function getAggregated() {
   if (!API_BASE_URL) {
     throw new Error('API_BASE_URL is not configured.');
@@ -73,4 +111,4 @@ function artifactUrl(filename) {
   return `${API_BASE_URL}/artifact/${encodeURIComponent(filename)}`;
 }
 
-export { uploadFile, triggerProcess, getAggregated, artifactUrl };
+export { uploadFile, triggerProcess, getProcessStatus, triggerProcessAndWait, getAggregated, artifactUrl };
