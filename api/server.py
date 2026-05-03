@@ -124,6 +124,19 @@ def debug_test_extraction():
         }
 
 
+@app.get("/debug/env")
+def debug_env():
+    """Show runtime environment variables used by the app."""
+    return {
+        "OPENAI_API_KEY_present": bool(os.getenv("OPENAI_API_KEY")),
+        "OPENAI_MODEL": os.getenv("OPENAI_MODEL"),
+        "OLLAMA_BASE_URL": os.getenv("OLLAMA_BASE_URL"),
+        "OLLAMA_MODEL": os.getenv("OLLAMA_MODEL"),
+        "FRONTEND_ORIGINS": os.getenv("FRONTEND_ORIGINS"),
+        "BASE_URL": os.getenv("BASE_URL"),
+    }
+
+
 @app.post("/process")
 def process_endpoint():
     try:
