@@ -68,6 +68,62 @@ async def upload(file: UploadFile = File(...), department: str = Form("other")):
     return {"stored_path": str(dest_path), "department": dept, "filename": filename}
 
 
+@app.get("/debug/files")
+def debug_files():
+    """List all files in the repository for debugging."""
+    files_by_dept = {}
+    for dept_dir in REPO_DIR.iterdir():
+        if dept_dir.is_dir():
+            dept_name = dept_dir.name
+            files = [{"name": f.name, "size": f.stat().st_size, "suffix": f.suffix} 
+                     for f in dept_dir.iterdir() if f.is_file()]
+            files_by_dept[dept_name] = files
+    return {
+        "repository_path": str(REPO_DIR),
+        "files_by_department": files_by_dept,
+        "total_files": sum(len(v) for v in files_by_dept.values()),
+    }
+
+
+@app.get("/debug/test-extraction")
+def debug_test_extraction():
+    """Test extraction on a single file for debugging."""
+    from workflow.extraction import extract_record
+    from pathlib import Path
+    
+    try:
+        # Find first file in repository
+        first_file = None
+        for dept_dir in REPO_DIR.iterdir():
+            if dept_dir.is_dir():
+                for f in dept_dir.iterdir():
+                    if f.is_file():
+                        first_file = f
+                        break
+            if first_file:
+                break
+        
+        if not first_file:
+            return {"error": "No files found in repository"}
+        
+        file_info = {"path": first_file, "department": first_file.parent.name}
+        result = extract_record(file_info)
+        
+        return {
+            "success": True,
+            "tested_file": first_file.name,
+            "file_type": result.get("file_type"),
+            "text_length": len(result.get("raw_text", "")),
+            "tables_count": len(result.get("raw_tables", [])),
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+        }
+
+
 @app.post("/process")
 def process_endpoint():
     try:
@@ -82,6 +138,7 @@ def process_endpoint():
             return str(p)
 
         return {
+            "success": True,
             "aggregated": res.get("aggregated"),
             "status": res.get("status"),
             "issues": res.get("issues"),
@@ -90,7 +147,14 @@ def process_endpoint():
             "aggregated_json": make_url(res.get("aggregated_json")),
         }
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        import traceback
+        return {
+            "success": False,
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+            "traceback": traceback.format_exc(),
+            "hint": "Check /debug/files and /debug/test-extraction for more details"
+        }
 
 
 @app.get("/artifact/{filename}")
