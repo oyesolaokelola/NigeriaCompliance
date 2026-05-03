@@ -30,12 +30,12 @@ def _ollama_available() -> bool:
 
 
 def call_llm(system_prompt: str, user_prompt: str) -> str:
-    print(f"Starting LLM call with model {OLLAMA_MODEL}")
     # Priority 1: OpenAI API (if key is set)
     api_key = os.getenv("OPENAI_API_KEY")
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
     if api_key:
+        print(f"Starting LLM call with OpenAI model {model}")
         try:
             from openai import OpenAI
 
@@ -48,12 +48,17 @@ def call_llm(system_prompt: str, user_prompt: str) -> str:
                 ],
                 temperature=0.2,
             )
+            print(f"OpenAI call succeeded with model {model}")
             return response.choices[0].message.content or ""
-        except Exception:
+        except Exception as e:
+            print(f"OpenAI API call failed: {type(e).__name__}: {e}")
             pass
+    else:
+        print("No OPENAI_API_KEY found, will try Ollama")
 
     # Priority 2: Local Ollama
     if _ollama_available():
+        print(f"Starting LLM call with Ollama model {OLLAMA_MODEL}")
         print("Ollama available, using local /v1/chat/completions")
         try:
             import requests
