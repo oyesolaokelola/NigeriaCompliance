@@ -137,6 +137,25 @@ def debug_env():
     }
 
 
+@app.get("/debug/output")
+def debug_output():
+    """Show what files are in the output directory."""
+    files = []
+    if OUTPUT_DIR.exists():
+        for f in OUTPUT_DIR.iterdir():
+            if f.is_file():
+                files.append({
+                    "name": f.name,
+                    "size": f.stat().st_size,
+                    "suffix": f.suffix,
+                })
+    return {
+        "output_path": str(OUTPUT_DIR),
+        "files": files,
+        "total_files": len(files),
+    }
+
+
 @app.post("/process")
 def process_endpoint():
     try:
