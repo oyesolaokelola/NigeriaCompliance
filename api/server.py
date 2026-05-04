@@ -106,6 +106,7 @@ def root():
             "/debug/test-extraction",
             "/debug/env",
             "/debug/output",
+            "/debug/processing-files",
         ],
         "note": "Use the Railway service URL with these endpoints. POST /upload and POST /process are the main workflow actions.",
     }
@@ -214,6 +215,27 @@ def debug_output():
         "output_path": str(OUTPUT_DIR),
         "files": files,
         "total_files": len(files),
+    }
+
+
+@app.get("/debug/processing-files")
+def debug_processing_files():
+    """Show which files would be processed by the workflow."""
+    from workflow.ingestion import discover_files
+    files = discover_files(REPO_DIR)
+    return {
+        "repository_path": str(REPO_DIR),
+        "files_to_process": [
+            {
+                "department": f["department"],
+                "filename": Path(f["path"]).name,
+                "path": str(f["path"]),
+                "size": Path(f["path"]).stat().st_size,
+            }
+            for f in files
+        ],
+        "total_files": len(files),
+        "note": "These are the files that will be processed. Sample generation only runs if this list is empty.",
     }
 
 
