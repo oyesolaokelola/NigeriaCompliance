@@ -3,7 +3,7 @@ import json
 import logging
 import runpy
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Set
 
 from .ingestion import discover_files
 from .extraction import extract_record
@@ -13,6 +13,30 @@ from .genai_agents import interpretation_agent, risk_analysis_agent, report_writ
 from .reporting import create_summary_charts, generate_html_report, generate_pdf_report
 
 logger = logging.getLogger(__name__)
+
+PROCESSED_FILES_NAME = ".processed_files.json"
+
+
+def _load_processed_files(processed_file_path: Path) -> Set[str]:
+    if not processed_file_path.exists():
+        return set()
+    try:
+        with open(processed_file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                return set(data.get("processed_files", []))
+    except Exception:
+        pass
+    return set()
+
+
+def _save_processed_files(processed_file_path: Path, processed_files: Set[str]):
+    with open(processed_file_path, "w", encoding="utf-8") as f:
+        json.dump({"processed_files": sorted(processed_files)}, f, indent=2)
+
+
+def _relative_repo_path(path: Path, repo_dir_path: Path) -> str:
+    return str(path.relative_to(repo_dir_path).as_posix())
 
 
 def process_repository(base_dir: Optional[str] = None, repo_dir: Optional[str] = None, output_dir: Optional[str] = None):
@@ -25,6 +49,9 @@ def process_repository(base_dir: Optional[str] = None, repo_dir: Optional[str] =
     output_dir_path = Path(output_dir) if output_dir else base_dir_path / "output"
     output_dir_path.mkdir(exist_ok=True, parents=True)
 
+    processed_file_path = output_dir_path / PROCESSED_FILES_NAME
+    processed_paths = _load_processed_files(processed_file_path)
+
     files = discover_files(repo_dir_path)
     if not files:
         generator_path = base_dir_path / "generate_sample_documents.py"
@@ -35,13 +62,23 @@ def process_repository(base_dir: Optional[str] = None, repo_dir: Optional[str] =
             except Exception as exc:
                 print(f"Sample document generation failed: {exc}")
 
-    if not files:
+    unprocessed_files = []
+    for fi in files:
+        try:
+            rel_path = _relative_repo_path(fi["path"], repo_dir_path)
+        except Exception:
+            continue
+        if rel_path not in processed_paths:
+            unprocessed_files.append(fi)
+
+    if not unprocessed_files:
         raise RuntimeError(
-            "No input files found in repository folders. "
-            "Add source documents under repository/<department>/ or fix sample generation."
+            "No new input files found since the last processing run. "
+            "Upload new documents under repository/<department>/ to process only fresh files."
         )
 
     records = []
+    files = unprocessed_files
 
     for index, fi in enumerate(files, start=1):
         dept = fi.get("department") or "Unknown"
@@ -88,6 +125,8 @@ def process_repository(base_dir: Optional[str] = None, repo_dir: Optional[str] =
             "file_type": raw_doc.get("file_type"),
         }
         records.append(record)
+        processed_paths.add(_relative_repo_path(path, repo_dir_path))
+        _save_processed_files(processed_file_path, processed_paths)
 
     aggregated = aggregate_records(records)
 

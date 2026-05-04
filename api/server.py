@@ -37,6 +37,23 @@ OUTPUT_DIR = BASE_DIR / "output"
 REPO_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+PROCESSED_FILES_NAME = ".processed_files.json"
+
+
+def _load_processed_paths() -> set[str]:
+    processed_file_path = OUTPUT_DIR / PROCESSED_FILES_NAME
+    if not processed_file_path.exists():
+        return set()
+    try:
+        with open(processed_file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                return set(data.get("processed_files", []))
+    except Exception:
+        pass
+    return set()
+
+
 PROCESS_LOCK = threading.Lock()
 PROCESS_STATUS = {
     "running": False,
@@ -222,20 +239,34 @@ def debug_output():
 def debug_processing_files():
     """Show which files would be processed by the workflow."""
     from workflow.ingestion import discover_files
-    files = discover_files(REPO_DIR)
-    return {
-        "repository_path": str(REPO_DIR),
-        "files_to_process": [
+
+    all_files = discover_files(REPO_DIR)
+    processed_paths = _load_processed_paths()
+
+    def _relative_repo_path(path: Path) -> str:
+        return str(path.relative_to(REPO_DIR).as_posix())
+
+    unprocessed = []
+    for f in all_files:
+        rel_path = _relative_repo_path(f["path"])
+        unprocessed.append(
             {
                 "department": f["department"],
                 "filename": Path(f["path"]).name,
                 "path": str(f["path"]),
+                "relative_path": rel_path,
                 "size": Path(f["path"]).stat().st_size,
+                "processed": rel_path in processed_paths,
             }
-            for f in files
-        ],
-        "total_files": len(files),
-        "note": "These are the files that will be processed. Sample generation only runs if this list is empty.",
+        )
+
+    return {
+        "repository_path": str(REPO_DIR),
+        "files_found": unprocessed,
+        "total_files": len(unprocessed),
+        "unprocessed_files": [f for f in unprocessed if not f["processed"]],
+        "total_unprocessed": len([f for f in unprocessed if not f["processed"]]),
+        "note": "Only unprocessed files will be included in the next workflow run.",
     }
 
 
