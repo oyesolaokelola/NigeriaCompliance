@@ -11,6 +11,7 @@ from .aggregation import aggregate_records
 from .compliance import run_compliance_checks
 from .genai_agents import interpretation_agent, risk_analysis_agent, report_writer_agent
 from .reporting import create_summary_charts, generate_html_report, generate_pdf_report
+from .template_styling import TemplateManager, StyleApplier
 
 logger = logging.getLogger(__name__)
 
@@ -39,15 +40,32 @@ def _relative_repo_path(path: Path, repo_dir_path: Path) -> str:
     return str(path.relative_to(repo_dir_path).as_posix())
 
 
-def process_repository(base_dir: Optional[str] = None, repo_dir: Optional[str] = None, output_dir: Optional[str] = None):
+def process_repository(base_dir: Optional[str] = None, repo_dir: Optional[str] = None, output_dir: Optional[str] = None, template_name: Optional[str] = None):
     """
     Process documents in a repository and return results as a dict.
     This is a programmatic entrypoint intended for API/POC use.
+    
+    Args:
+        base_dir: Base directory (defaults to project root)
+        repo_dir: Repository directory with documents (defaults to base_dir/repository)
+        output_dir: Output directory for results (defaults to base_dir/output)
+        template_name: Optional template name for styling output documents
     """
     base_dir_path = Path(base_dir) if base_dir else Path(__file__).resolve().parent.parent
     repo_dir_path = Path(repo_dir) if repo_dir else base_dir_path / "repository"
     output_dir_path = Path(output_dir) if output_dir else base_dir_path / "output"
     output_dir_path.mkdir(exist_ok=True, parents=True)
+    
+    # Initialize template manager if template requested
+    template_profile = None
+    if template_name:
+        templates_dir = base_dir_path / "templates"
+        template_manager = TemplateManager(templates_dir)
+        template_profile = template_manager.get_template_profile(template_name)
+        if template_profile:
+            logger.info(f"Using template: {template_name}")
+        else:
+            logger.warning(f"Template '{template_name}' not found, proceeding without template styling")
 
     processed_file_path = output_dir_path / PROCESSED_FILES_NAME
     processed_paths = _load_processed_files(processed_file_path)
@@ -147,9 +165,9 @@ def process_repository(base_dir: Optional[str] = None, repo_dir: Optional[str] =
     with open(aggregated_json_path, "w", encoding="utf-8") as f:
         json.dump(aggregated, f, indent=2)
 
-    # Reports
+    # Reports - with optional template styling
     html_path = generate_html_report(aggregated, status, issues, charts, narrative, output_dir_path)
-    pdf_path = generate_pdf_report(aggregated, status, issues, charts, narrative, output_dir_path)
+    pdf_path = generate_pdf_report(aggregated, status, issues, charts, narrative, output_dir_path, template_profile)
 
     result = {
         "aggregated": aggregated,
@@ -161,6 +179,7 @@ def process_repository(base_dir: Optional[str] = None, repo_dir: Optional[str] =
         "aggregated_json": str(aggregated_json_path),
         "html_report": str(html_path),
         "pdf_report": str(pdf_path),
+        "template_used": template_name,
     }
     return result
 

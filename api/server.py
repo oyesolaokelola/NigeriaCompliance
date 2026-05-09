@@ -15,6 +15,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
 from workflow.run_workflow import process_repository
+from workflow.template_styling import TemplateManager
 
 app = FastAPI(title="NigeriaCompliance POC API")
 
@@ -34,8 +35,13 @@ app.add_middleware(
 
 REPO_DIR = BASE_DIR / "repository"
 OUTPUT_DIR = BASE_DIR / "output"
+TEMPLATES_DIR = BASE_DIR / "templates"
 REPO_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
+TEMPLATES_DIR.mkdir(exist_ok=True)
+
+# Initialize template manager
+template_manager = TemplateManager(TEMPLATES_DIR)
 
 PROCESSED_FILES_NAME = ".processed_files.json"
 
@@ -62,6 +68,7 @@ PROCESS_STATUS = {
     "last_error": None,
     "last_error_type": None,
     "last_message": None,
+    "active_template": None,
 }
 
 
@@ -85,9 +92,11 @@ def _start_background_process():
             }
         )
 
+    active_template = PROCESS_STATUS.get("active_template")
+
     def _target():
         try:
-            result = process_repository()
+            result = process_repository(template_name=active_template)
             _update_status(
                 last_finished=datetime.utcnow().isoformat() + "Z",
                 last_message="Processing completed successfully",
@@ -111,21 +120,29 @@ def _start_background_process():
 @app.get("/")
 def root():
     return {
-        "message": "NigeriaCompliance API is running.",
-        "endpoints": [
+        "message": "NigeriaCompliance API is running with Dynamic Template Styling Support",
+        "core_endpoints": [
             "/health",
-            "/upload",
-            "/process",
-            "/process/status",
-            "/aggregated",
-            "/artifact/{filename}",
+            "/upload (POST) - Upload document to process",
+            "/process (POST) - Start processing workflow",
+            "/process/status (GET) - Get processing status",
+            "/aggregated (GET) - Get aggregated results",
+            "/artifact/{filename} (GET) - Download output file",
+        ],
+        "template_endpoints": [
+            "/templates/upload (POST) - Upload style template",
+            "/templates (GET) - List all templates",
+            "/templates/{template_name}/activate (POST) - Activate template",
+            "/templates/info/{template_name} (GET) - Get template details",
+        ],
+        "debug_endpoints": [
             "/debug/files",
             "/debug/test-extraction",
             "/debug/env",
             "/debug/output",
             "/debug/processing-files",
         ],
-        "note": "Use the Railway service URL with these endpoints. POST /upload and POST /process are the main workflow actions.",
+        "workflow": "Upload style template → Upload documents → Activate template → Process with styling",
     }
 
 
@@ -145,6 +162,138 @@ async def upload(file: UploadFile = File(...), department: str = Form("other")):
     with open(dest_path, "wb") as f:
         f.write(content)
     return {"stored_path": str(dest_path), "department": dept, "filename": filename}
+
+
+@app.post("/templates/upload")
+async def upload_template(file: UploadFile = File(...), template_name: str = Form(None)):
+    """Upload and register a style template document"""
+    try:
+        # Store template file
+        filename = template_name or file.filename
+        template_path = TEMPLATES_DIR / f"{uuid.uuid4().hex}_{filename}"
+        content = await file.read()
+        with open(template_path, "wb") as f:
+            f.write(content)
+        
+        # Extract and register styling
+        profile = template_manager.register_template(str(template_path), template_name or filename)
+        
+        return {
+            "success": True,
+            "template_name": profile.template_name,
+            "template_path": str(template_path),
+            "message": f"Template '{profile.template_name}' registered successfully",
+            "styles": {
+                "title_font": {
+                    "name": profile.title_font.name,
+                    "size": profile.title_font.size,
+                    "bold": profile.title_font.bold
+                },
+                "heading_font": {
+                    "name": profile.heading_font.name,
+                    "size": profile.heading_font.size,
+                    "bold": profile.heading_font.bold
+                },
+                "body_font": {
+                    "name": profile.body_font.name,
+                    "size": profile.body_font.size
+                }
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Template upload failed: {str(e)}")
+
+
+@app.get("/templates")
+def list_templates():
+    """List all registered templates"""
+    try:
+        templates = template_manager.list_templates()
+        active = PROCESS_STATUS.get("active_template")
+        return {
+            "templates": templates,
+            "active_template": active,
+            "total_templates": len(templates)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to list templates: {str(e)}")
+
+
+@app.post("/templates/{template_name}/activate")
+def activate_template(template_name: str):
+    """Activate a template for use in document processing"""
+    try:
+        profile = template_manager.get_template_profile(template_name)
+        if not profile:
+            raise HTTPException(status_code=404, detail=f"Template '{template_name}' not found")
+        
+        _update_status(active_template=template_name)
+        return {
+            "success": True,
+            "active_template": template_name,
+            "message": f"Template '{template_name}' activated",
+            "profile": {
+                "template_name": profile.template_name,
+                "title_font": profile.title_font.name if profile.title_font else "Default",
+                "heading_font": profile.heading_font.name if profile.heading_font else "Default",
+                "body_font": profile.body_font.name if profile.body_font else "Default",
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to activate template: {str(e)}")
+
+
+@app.get("/templates/info/{template_name}")
+def get_template_info(template_name: str):
+    """Get detailed information about a specific template"""
+    try:
+        profile = template_manager.get_template_profile(template_name)
+        if not profile:
+            raise HTTPException(status_code=404, detail=f"Template '{template_name}' not found")
+        
+        return {
+            "template_name": profile.template_name,
+            "margins": {
+                "left": profile.margin_left,
+                "right": profile.margin_right,
+                "top": profile.margin_top,
+                "bottom": profile.margin_bottom
+            },
+            "fonts": {
+                "title": {
+                    "name": profile.title_font.name,
+                    "size": profile.title_font.size,
+                    "bold": profile.title_font.bold,
+                    "italic": profile.title_font.italic,
+                    "color": profile.title_font.color
+                },
+                "heading": {
+                    "name": profile.heading_font.name,
+                    "size": profile.heading_font.size,
+                    "bold": profile.heading_font.bold,
+                    "italic": profile.heading_font.italic,
+                    "color": profile.heading_font.color
+                },
+                "body": {
+                    "name": profile.body_font.name,
+                    "size": profile.body_font.size,
+                    "bold": profile.body_font.bold,
+                    "italic": profile.body_font.italic,
+                    "color": profile.body_font.color
+                }
+            },
+            "page": {
+                "width": profile.page_width,
+                "height": profile.page_height,
+                "orientation": profile.orientation
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to get template info: {str(e)}")
 
 
 @app.get("/debug/files")

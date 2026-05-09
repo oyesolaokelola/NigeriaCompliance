@@ -1,0 +1,50 @@
+{
+  "templates": [
+    {
+      "template_name": "test_professional",
+      "template_path": "templates\\professional_template.docx",
+      "page_width": 8.5,
+      "page_height": 11.0,
+      "margin_left": 1440,
+      "margin_right": 1440,
+      "margin_top": 1440,
+      "margin_bottom": 1440,
+      "title_font": {
+        "name": "Calibri",
+        "size": 28,
+        "bold": true,
+        "italic": false,
+        "color": "000000"
+      },
+      "heading_font": {
+        "name": "Calibri",
+        "size": 14,
+        "bold": false,
+        "italic": true,
+        "color": "000000"
+      },
+      "body_font": {
+        "name": "Calibri",
+        "size": 12,
+        "bold": false,
+        "italic": false,
+        "color": "000000"
+      },
+      "paragraph_style": {
+        "alignment": "center",
+        "line_spacing": 1.0,
+        "space_before": 0,
+        "space_after": 0,
+        "indent_left": 0,
+        "indent_right": 0
+      },
+      "section_styles": {},
+      "table_style": "Light Grid Accent 1",
+      "color_scheme": {},
+      "header_content": "",
+      "footer_content": "",
+      "has_page_numbers": false,
+      "orientation": "portrait"
+    }
+  ]
+}

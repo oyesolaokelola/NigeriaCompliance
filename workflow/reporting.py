@@ -3,8 +3,10 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 import matplotlib.pyplot as plt
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, letter
 from reportlab.pdfgen import canvas
+from reportlab.lib.units import inch
+from reportlab.lib.colors import HexColor
 
 
 def create_summary_charts(aggregated: Dict[str, Any], output_dir: Path) -> Dict[str, Path]:
@@ -118,66 +120,122 @@ def generate_pdf_report(
     charts: Dict[str, Path],
     narrative: str,
     output_dir: Path,
+    template_profile: Optional[Any] = None,
 ) -> Path:
     """
-    PDF template version of the same report structure.
-    Not a full HTML renderer, but aligned sections.
+    PDF template version of the same report structure with optional custom styling.
+    
+    Args:
+        aggregated: Aggregated data
+        status: Compliance status
+        issues: List of compliance issues
+        charts: Dictionary of chart paths
+        narrative: Narrative text
+        output_dir: Output directory
+        template_profile: Optional TemplateProfile for custom styling
     """
     path = output_dir / "Financial_Compliance_Report_Q1_2025.pdf"
-    c = canvas.Canvas(str(path), pagesize=A4)
-    width, height = A4
-
+    
+    # Determine page size and margins from template or use defaults
+    pagesize = A4
+    if template_profile:
+        if template_profile.page_width > 0:
+            pagesize = (template_profile.page_width * inch, template_profile.page_height * inch)
+    
+    c = canvas.Canvas(str(path), pagesize=pagesize)
+    width, height = pagesize
+    
+    # Get styling from template
+    title_font = "Helvetica-Bold"
+    heading_font = "Helvetica-Bold"
+    body_font = "Helvetica"
+    title_size = 16
+    heading_size = 12
+    body_size = 10
+    title_color = (0, 0, 0)
+    
+    if template_profile and template_profile.title_font:
+        title_font = template_profile.title_font.name or "Helvetica-Bold"
+        title_size = template_profile.title_font.size or 16
+        title_color_hex = template_profile.title_font.color or "000000"
+        try:
+            title_color = tuple(int(title_color_hex[i:i+2], 16)/255 for i in (0, 2, 4))
+        except:
+            title_color = (0, 0, 0)
+    
+    if template_profile and template_profile.heading_font:
+        heading_font = template_profile.heading_font.name or "Helvetica-Bold"
+        heading_size = template_profile.heading_font.size or 12
+    
+    if template_profile and template_profile.body_font:
+        body_font = template_profile.body_font.name or "Helvetica"
+        body_size = template_profile.body_font.size or 10
+    
+    # Calculate margins
+    left_margin = 50
+    right_margin = 50
+    if template_profile:
+        left_margin = template_profile.margin_left / 20 if template_profile.margin_left else 50
+        right_margin = template_profile.margin_right / 20 if template_profile.margin_right else 50
+    
     y = height - 40
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(50, y, "Northbridge Holdings Ltd")
+    
+    # Title
+    c.setFont(title_font, title_size)
+    c.setFillColorRGB(*title_color)
+    c.drawString(left_margin, y, "Northbridge Holdings Ltd")
     y -= 24
-    c.setFont("Helvetica-Bold", 14)
-    c.drawString(50, y, "Financial Compliance Report – Q1 2025")
+    
+    # Subtitle
+    c.setFont(heading_font, heading_size)
+    c.drawString(left_margin, y, "Financial Compliance Report – Q1 2025")
     y -= 30
 
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(50, y, f"Compliance Status: {status}")
+    # Status
+    c.setFont(heading_font, heading_size)
+    c.drawString(left_margin, y, f"Compliance Status: {status}")
     y -= 20
 
-    c.setFont("Helvetica", 10)
+    # Narrative
+    c.setFont(body_font, body_size)
     for line in narrative.splitlines():
-        c.drawString(50, y, line[:110])
+        c.drawString(left_margin, y, line[:110])
         y -= 14
         if y < 80:
             c.showPage()
             y = height - 50
-            c.setFont("Helvetica", 10)
+            c.setFont(body_font, body_size)
 
     # New page for charts and issues
     c.showPage()
     y = height - 50
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(50, y, "Compliance Issues")
+    c.setFont(heading_font, heading_size)
+    c.drawString(left_margin, y, "Compliance Issues")
     y -= 20
-    c.setFont("Helvetica", 10)
+    c.setFont(body_font, body_size)
     if not issues:
-        c.drawString(50, y, "No issues detected.")
+        c.drawString(left_margin, y, "No issues detected.")
         y -= 14
     else:
         for issue in issues:
-            c.drawString(50, y, f"- {issue[:110]}")
+            c.drawString(left_margin, y, f"- {issue[:110]}")
             y -= 14
             if y < 80:
                 c.showPage()
                 y = height - 50
-                c.setFont("Helvetica", 10)
+                c.setFont(body_font, body_size)
 
     # Charts
     c.showPage()
     y = height - 50
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(50, y, "Visual Summaries")
+    c.setFont(heading_font, heading_size)
+    c.drawString(left_margin, y, "Visual Summaries")
     y -= 20
 
     for key in ["revenue_vs_payroll", "vendor_spend"]:
         chart_path = charts.get(key)
         if chart_path and chart_path.exists():
-            c.drawImage(str(chart_path), 50, y - 220, width=300, preserveAspectRatio=True, mask="auto")
+            c.drawImage(str(chart_path), left_margin, y - 220, width=300, preserveAspectRatio=True, mask="auto")
             y -= 240
             if y < 100:
                 c.showPage()
