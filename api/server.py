@@ -228,7 +228,7 @@ def list_templates():
     """List all registered templates"""
     try:
         templates = template_manager.list_templates()
-        active = PROCESS_STATUS.get("active_template")
+        active = PROCESS_STATUS.get("active_template") or ""
         return {
             "templates": templates,
             "active_template": active,
