@@ -1,6 +1,7 @@
 # workflow/reporting.py
 from pathlib import Path
 from typing import Dict, Any, List, Optional
+import shutil
 
 import matplotlib.pyplot as plt
 from reportlab.lib.pagesizes import A4, letter
@@ -49,8 +50,29 @@ def generate_html_report(
     charts: Dict[str, Path],
     narrative: str,
     output_dir: Path,
+    template_profile: Optional[Any] = None,
 ) -> Path:
     path = output_dir / "Financial_Compliance_Report_Q1_2025.html"
+
+    font_family = "Arial, sans-serif"
+    title_color = "#000000"
+    heading_color = "#333333"
+    body_color = "#000000"
+    logo_src = None
+
+    if template_profile:
+        if template_profile.body_font and template_profile.body_font.name:
+            font_family = template_profile.body_font.name
+        if template_profile.color_scheme:
+            title_color = f"#{template_profile.color_scheme.get('primary', '000000')}"
+            heading_color = f"#{template_profile.color_scheme.get('secondary', '333333')}"
+            body_color = f"#{template_profile.color_scheme.get('body', '000000')}"
+        if template_profile.logo_path:
+            logo_path = Path(template_profile.logo_path)
+            if logo_path.exists():
+                dest_logo = output_dir / logo_path.name
+                shutil.copy(logo_path, dest_logo)
+                logo_src = dest_logo.name
 
     finance = aggregated["departmental"].get("Finance", {}).get("metrics", {})
     procurement = aggregated["departmental"].get("Procurement", {}).get("metrics", {})
@@ -61,7 +83,17 @@ def generate_html_report(
         return f'<img src="{p.name}" alt="{p.name}" style="max-width:400px;">' if p else ""
 
     with open(path, "w", encoding="utf-8") as f:
-        f.write("<html><head><title>Financial Compliance Report Q1 2025</title></head><body>")
+        f.write("<html><head><title>Financial Compliance Report Q1 2025</title>")
+        f.write("<style>")
+        f.write("body { font-family: %s; color: %s; padding: 24px; line-height: 1.5; }" % (font_family, body_color))
+        f.write("h1 { font-size: 2.2em; color: %s; margin-bottom: 0.2em; }" % title_color)
+        f.write("h2, h3, h4 { color: %s; margin-top: 1.2em; }" % heading_color)
+        f.write("table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }")
+        f.write("table td, table th { border: 1px solid #ccc; padding: 8px; }")
+        f.write("img.logo { max-width: 200px; margin-bottom: 16px; }")
+        f.write("</style></head><body>")
+        if logo_src:
+            f.write(f'<img class="logo" src="{logo_src}" alt="Logo">')
         f.write("<h1>Northbridge Holdings Ltd</h1>")
         f.write("<h2>Financial Compliance Report – Q1 2025</h2>")
 
@@ -153,24 +185,32 @@ def generate_pdf_report(
     heading_size = 12
     body_size = 10
     title_color = (0, 0, 0)
-    
-    if template_profile and template_profile.title_font:
-        title_font = template_profile.title_font.name or "Helvetica-Bold"
-        title_size = template_profile.title_font.size or 16
+    line_spacing = 1.2
+    logo_path = None
+
+    if template_profile:
+        title_font = _map_pdf_font_name(template_profile.title_font.name) if template_profile.title_font else title_font
+        heading_font = _map_pdf_font_name(template_profile.heading_font.name) if template_profile.heading_font else heading_font
+        body_font = _map_pdf_font_name(template_profile.body_font.name) if template_profile.body_font else body_font
+        title_size = template_profile.title_font.size or title_size
+        heading_size = template_profile.heading_font.size or heading_size
+        body_size = template_profile.body_font.size or body_size
+
         title_color_hex = template_profile.title_font.color or "000000"
         try:
             title_color = tuple(int(title_color_hex[i:i+2], 16)/255 for i in (0, 2, 4))
         except:
             title_color = (0, 0, 0)
-    
-    if template_profile and template_profile.heading_font:
-        heading_font = template_profile.heading_font.name or "Helvetica-Bold"
-        heading_size = template_profile.heading_font.size or 12
-    
-    if template_profile and template_profile.body_font:
-        body_font = template_profile.body_font.name or "Helvetica"
-        body_size = template_profile.body_font.size or 10
-    
+
+        line_spacing = template_profile.paragraph_style.line_spacing or line_spacing
+        if template_profile.logo_path:
+            logo_path = Path(template_profile.logo_path)
+            if logo_path.exists():
+                logo_path = output_dir / logo_path.name
+                shutil.copy(Path(template_profile.logo_path), logo_path)
+            else:
+                logo_path = None
+
     # Calculate margins
     left_margin = 50
     right_margin = 50
@@ -180,16 +220,25 @@ def generate_pdf_report(
     
     y = height - 40
     
+    # Logo
+    if logo_path and logo_path.exists():
+        try:
+            logo_width = min(180, width - left_margin - right_margin)
+            c.drawImage(str(logo_path), left_margin, y - 80, width=logo_width, height=60, preserveAspectRatio=True, mask='auto')
+            y -= 90
+        except Exception:
+            pass
+
     # Title
     c.setFont(title_font, title_size)
     c.setFillColorRGB(*title_color)
     c.drawString(left_margin, y, "Northbridge Holdings Ltd")
-    y -= 24
+    y -= max(24, title_size + 4)
     
     # Subtitle
     c.setFont(heading_font, heading_size)
     c.drawString(left_margin, y, "Financial Compliance Report – Q1 2025")
-    y -= 30
+    y -= max(28, heading_size + 6)
 
     # Status
     c.setFont(heading_font, heading_size)
@@ -198,9 +247,10 @@ def generate_pdf_report(
 
     # Narrative
     c.setFont(body_font, body_size)
+    line_height = body_size * line_spacing
     for line in narrative.splitlines():
         c.drawString(left_margin, y, line[:110])
-        y -= 14
+        y -= line_height
         if y < 80:
             c.showPage()
             y = height - 50
@@ -244,3 +294,16 @@ def generate_pdf_report(
     c.showPage()
     c.save()
     return path
+
+
+def _map_pdf_font_name(font_name: Optional[str]) -> str:
+    if not font_name:
+        return "Helvetica"
+    normalized = font_name.lower()
+    if "times" in normalized or "serif" in normalized:
+        return "Times-Roman"
+    if "courier" in normalized or "mono" in normalized:
+        return "Courier"
+    if "arial" in normalized or "helvetica" in normalized or "calibri" in normalized:
+        return "Helvetica"
+    return "Helvetica"

@@ -56,16 +56,14 @@ def process_repository(base_dir: Optional[str] = None, repo_dir: Optional[str] =
     output_dir_path = Path(output_dir) if output_dir else base_dir_path / "output"
     output_dir_path.mkdir(exist_ok=True, parents=True)
     
-    # Initialize template manager if template requested
-    template_profile = None
-    if template_name:
-        templates_dir = base_dir_path / "templates"
-        template_manager = TemplateManager(templates_dir)
-        template_profile = template_manager.get_template_profile(template_name)
-        if template_profile:
-            logger.info(f"Using template: {template_name}")
-        else:
-            logger.warning(f"Template '{template_name}' not found, proceeding without template styling")
+    # Initialize template manager and choose either dynamic template or default profile
+    templates_dir = base_dir_path / "templates"
+    template_manager = TemplateManager(templates_dir)
+    template_profile = template_manager.get_template_or_default(template_name)
+    if template_profile.template_name != "default":
+        logger.info(f"Using dynamic template: {template_profile.template_name}")
+    else:
+        logger.info("Using default styling profile because no dynamic template was available")
 
     processed_file_path = output_dir_path / PROCESSED_FILES_NAME
     processed_paths = _load_processed_files(processed_file_path)
@@ -166,7 +164,7 @@ def process_repository(base_dir: Optional[str] = None, repo_dir: Optional[str] =
         json.dump(aggregated, f, indent=2)
 
     # Reports - with optional template styling
-    html_path = generate_html_report(aggregated, status, issues, charts, narrative, output_dir_path)
+    html_path = generate_html_report(aggregated, status, issues, charts, narrative, output_dir_path, template_profile)
     pdf_path = generate_pdf_report(aggregated, status, issues, charts, narrative, output_dir_path, template_profile)
 
     result = {
@@ -179,7 +177,7 @@ def process_repository(base_dir: Optional[str] = None, repo_dir: Optional[str] =
         "aggregated_json": str(aggregated_json_path),
         "html_report": str(html_path),
         "pdf_report": str(pdf_path),
-        "template_used": template_name,
+        "template_used": template_profile.template_name,
     }
     return result
 

@@ -11,6 +11,7 @@ This module handles:
 
 import json
 import logging
+from collections import Counter
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass, asdict
@@ -19,6 +20,7 @@ import re
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.section import WD_ORIENT
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 import pdfplumber
@@ -81,6 +83,7 @@ class TemplateProfile:
     footer_content: str = ""
     has_page_numbers: bool = False
     orientation: str = "portrait"
+    logo_path: Optional[str] = None
     
 
     def __post_init__(self):
@@ -119,40 +122,34 @@ class TemplateExtractor:
             profile.margin_right = section.right_margin.twips
             profile.margin_top = section.top_margin.twips
             profile.margin_bottom = section.bottom_margin.twips
+            profile.orientation = "landscape" if section.orientation == WD_ORIENT.LANDSCAPE else "portrait"
             
-            # Extract fonts from paragraphs
-            title_fonts = []
-            heading_fonts = []
-            body_fonts = []
-            
-            for para in doc.paragraphs[:20]:  # Sample first 20 paragraphs
+            # Collect font samples from the template
+            font_samples = []
+            for para in doc.paragraphs[:40]:
                 if not para.text.strip():
                     continue
-                    
                 for run in para.runs:
                     font = run.font
-                    font_style = FontStyle(
+                    font_samples.append(FontStyle(
                         name=font.name or "Calibri",
                         size=int(font.size.pt) if font.size else 11,
-                        bold=font.bold or False,
-                        italic=font.italic or False,
+                        bold=bool(font.bold),
+                        italic=bool(font.italic),
                         color=self._extract_font_color(font)
-                    )
-                    
-                    # Classify font by size and usage
-                    if font.size and font.size.pt >= 18:
-                        title_fonts.append(font_style)
-                    elif font.size and font.size.pt >= 14:
-                        heading_fonts.append(font_style)
-                    else:
-                        body_fonts.append(font_style)
+                    ))
             
-            # Set dominant styles
-            profile.title_font = title_fonts[0] if title_fonts else FontStyle(size=28, bold=True)
-            profile.heading_font = heading_fonts[0] if heading_fonts else FontStyle(size=14, bold=True)
-            profile.body_font = body_fonts[0] if body_fonts else FontStyle(size=11)
+            ranked = self._rank_font_styles(font_samples)
+            profile.title_font = ranked.get("title", FontStyle(name="Calibri", size=28, bold=True))
+            profile.heading_font = ranked.get("heading", FontStyle(name="Calibri", size=14, bold=True))
+            profile.body_font = ranked.get("body", FontStyle(name="Calibri", size=11))
+            profile.color_scheme = {
+                "primary": profile.title_font.color,
+                "secondary": profile.heading_font.color,
+                "body": profile.body_font.color,
+            }
             
-            # Extract paragraph styles
+            # Extract paragraph style from the first meaningful paragraph
             for para in doc.paragraphs:
                 if para.text.strip():
                     pPr = para._element.pPr
@@ -160,25 +157,24 @@ class TemplateExtractor:
                         profile.paragraph_style = self._extract_paragraph_style(pPr)
                         break
             
-            # Extract header/footer
+            # Extract header/footer text
             if doc.sections[0].header.paragraphs:
-                header_text = " ".join([p.text for p in doc.sections[0].header.paragraphs])
-                profile.header_content = header_text[:100]
-            
+                header_text = " ".join([p.text for p in doc.sections[0].header.paragraphs if p.text.strip()])
+                profile.header_content = header_text[:150]
             if doc.sections[0].footer.paragraphs:
-                footer_text = " ".join([p.text for p in doc.sections[0].footer.paragraphs])
-                profile.footer_content = footer_text[:100]
-            
-            # Check for page numbers in footer
+                footer_text = " ".join([p.text for p in doc.sections[0].footer.paragraphs if p.text.strip()])
+                profile.footer_content = footer_text[:150]
             profile.has_page_numbers = "page" in profile.footer_content.lower()
+            
+            # Extract logo or first image from the template
+            profile.logo_path = self._extract_docx_logo(doc, template_path.parent, profile.template_name)
             
             # Extract table style if tables exist
             if doc.tables:
-                profile.table_style = "Light Grid Accent 1"  # Default Word style
+                profile.table_style = doc.tables[0].style.name if doc.tables[0].style else profile.table_style
             
             logger.info(f"Successfully extracted template profile from {template_path}")
             return profile
-            
         except Exception as e:
             logger.error(f"Error extracting DOCX template: {e}")
             raise
@@ -192,36 +188,37 @@ class TemplateExtractor:
             )
             
             with pdfplumber.open(template_path) as pdf:
-                # Extract page info
                 if pdf.pages:
                     page = pdf.pages[0]
-                    # PDF measurements are in points
                     profile.page_width = page.width / 72  # Convert to inches
                     profile.page_height = page.height / 72
                     
-                    # Extract text and fonts
-                    for obj in page.chars[:50]:  # Sample first 50 chars
-                        if obj.get('name'):
-                            font_size = int(obj.get('size', 11))
-                            if font_size >= 18:
-                                profile.title_font = FontStyle(
-                                    name=obj.get('name', 'Helvetica'),
-                                    size=font_size
-                                )
-                            elif font_size >= 14:
-                                profile.heading_font = FontStyle(
-                                    name=obj.get('name', 'Helvetica'),
-                                    size=font_size
-                                )
-                            else:
-                                profile.body_font = FontStyle(
-                                    name=obj.get('name', 'Helvetica'),
-                                    size=font_size
-                                )
+                    font_samples = []
+                    for obj in page.chars[:200]:
+                        font_name = obj.get('fontname') or obj.get('name') or 'Helvetica'
+                        font_size = int(obj.get('size', 11))
+                        font_samples.append(FontStyle(
+                            name=font_name,
+                            size=font_size,
+                            bold=False,
+                            italic=False,
+                            color="000000"
+                        ))
+                    
+                    ranked = self._rank_font_styles(font_samples)
+                    profile.title_font = ranked.get("title", FontStyle(name="Helvetica", size=28, bold=True))
+                    profile.heading_font = ranked.get("heading", FontStyle(name="Helvetica", size=14, bold=True))
+                    profile.body_font = ranked.get("body", FontStyle(name="Helvetica", size=11))
+                    profile.color_scheme = {
+                        "primary": profile.title_font.color,
+                        "secondary": profile.heading_font.color,
+                        "body": profile.body_font.color,
+                    }
+                    
+                    profile.logo_path = self._extract_pdf_logo(page, template_path.parent, profile.template_name)
             
             logger.info(f"Successfully extracted template profile from PDF {template_path}")
             return profile
-            
         except Exception as e:
             logger.error(f"Error extracting PDF template: {e}")
             raise
@@ -279,6 +276,86 @@ class TemplateExtractor:
         
         return style
 
+    def _rank_font_styles(self, font_styles: List[FontStyle]) -> Dict[str, FontStyle]:
+        """Rank font styles dynamically based on template usage."""
+        if not font_styles:
+            return {}
+
+        size_groups: Dict[int, List[FontStyle]] = {}
+        for font in font_styles:
+            size_groups.setdefault(font.size, []).append(font)
+
+        unique_sizes = sorted(size_groups.keys(), reverse=True)
+        if not unique_sizes:
+            return {}
+
+        title_size = unique_sizes[0]
+        heading_size = unique_sizes[1] if len(unique_sizes) > 1 else title_size
+        body_size = unique_sizes[-1]
+
+        title_font = self._select_most_common_style(size_groups[title_size])
+        heading_font = self._select_most_common_style(size_groups[heading_size])
+        body_font = self._select_most_common_style(size_groups[body_size])
+
+        return {
+            "title": title_font,
+            "heading": heading_font,
+            "body": body_font,
+        }
+
+    @staticmethod
+    def _select_most_common_style(styles: List[FontStyle]) -> FontStyle:
+        if not styles:
+            return FontStyle()
+
+        counts = Counter(
+            (style.name, style.size, style.bold, style.italic, style.color)
+            for style in styles
+        )
+        best_style_key = max(counts.items(), key=lambda item: (item[1], item[0][1]))[0]
+        for style in styles:
+            if (style.name, style.size, style.bold, style.italic, style.color) == best_style_key:
+                return style
+        return styles[0]
+
+    @staticmethod
+    def _extract_docx_logo(doc: Document, template_dir: Path, template_name: str) -> Optional[str]:
+        for rel in doc.part.rels.values():
+            if 'image' in rel.reltype:
+                try:
+                    image_part = rel.target_part
+                    image_bytes = image_part.blob
+                    ext = image_part.content_type.split('/')[-1]
+                    logo_name = f"{template_name}_logo.{ext}"
+                    logo_path = template_dir / logo_name
+                    with open(logo_path, "wb") as fh:
+                        fh.write(image_bytes)
+                    return str(logo_path)
+                except Exception:
+                    continue
+        return None
+
+    @staticmethod
+    def _extract_pdf_logo(page, template_dir: Path, template_name: str) -> Optional[str]:
+        images = getattr(page, 'images', None) or []
+        if not images:
+            return None
+
+        image_obj = images[0]
+        try:
+            image_data = page.extract_image(image_obj.get('object_id'))
+            if not image_data:
+                return None
+            image_bytes = image_data.get('image')
+            ext = image_data.get('ext', 'png')
+            logo_name = f"{template_name}_logo.{ext}"
+            logo_path = template_dir / logo_name
+            with open(logo_path, "wb") as fh:
+                fh.write(image_bytes)
+            return str(logo_path)
+        except Exception:
+            return None
+
 
 class StyleApplier:
     """Applies extracted template styles to generated documents"""
@@ -308,12 +385,13 @@ class StyleApplier:
             
             # Apply styles to paragraphs
             for i, para in enumerate(doc.paragraphs):
-                if i == 0:  # Title
+                style_name = para.style.name.lower() if para.style and para.style.name else ""
+                if "title" in style_name or "heading 1" in style_name or (i == 0 and not style_name):
                     self._apply_font_style(para, self.profile.title_font)
                     para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                elif i < 3:  # Headings
+                elif "heading" in style_name:
                     self._apply_font_style(para, self.profile.heading_font)
-                else:  # Body
+                else:
                     self._apply_font_style(para, self.profile.body_font)
                     self._apply_paragraph_style(para, self.profile.paragraph_style)
             
@@ -441,9 +519,35 @@ class TemplateManager:
         else:
             profiles.setdefault("templates", []).append(profile_dict)
         
-        with open(self.profiles_cache_file, 'w') as f:
+        with open(self.profiles_cache_file, 'w', encoding='utf-8') as f:
             json.dump(profiles, f, indent=2)
     
+    def get_default_profile(self) -> TemplateProfile:
+        """Return a safe default styling profile when no dynamic template is available."""
+        default = TemplateProfile(
+            template_name="default",
+            template_path=str(self.template_dir / "default_profile"),
+            margin_left=1440,
+            margin_right=1440,
+            margin_top=1440,
+            margin_bottom=1440,
+            title_font=FontStyle(name="Calibri", size=28, bold=True, color="000000"),
+            heading_font=FontStyle(name="Calibri", size=16, bold=True, color="000000"),
+            body_font=FontStyle(name="Calibri", size=11, bold=False, italic=False, color="000000"),
+            paragraph_style=ParagraphStyle(alignment="left", line_spacing=1.15, space_before=0, space_after=120),
+            color_scheme={"primary": "000000", "secondary": "333333", "body": "000000"},
+            logo_path=None,
+            orientation="portrait"
+        )
+        return default
+
+    def get_template_or_default(self, template_name: Optional[str]) -> TemplateProfile:
+        if template_name:
+            profile = self.get_template_profile(template_name)
+            if profile:
+                return profile
+        return self.get_default_profile()
+
     def _load_profiles(self) -> dict:
         """Load all cached profiles"""
         if self.profiles_cache_file.exists():
