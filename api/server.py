@@ -128,6 +128,7 @@ def root():
             "/process/status (GET) - Get processing status",
             "/aggregated (GET) - Get aggregated results",
             "/artifact/{filename} (GET) - Download output file",
+            "/artifacts (GET) - List generated artifact URLs",
         ],
         "template_endpoints": [
             "/templates/upload (POST) - Upload style template",
@@ -435,6 +436,8 @@ def process_endpoint():
         "running": True,
         "status_url": "/process/status",
         "aggregated_url": "/aggregated",
+        "artifact_list_url": "/artifacts",
+        "artifact_template": "/artifact/{filename}",
     }
 
 
@@ -467,3 +470,24 @@ def get_aggregated():
     with open(path, "r", encoding="utf-8") as f:
         j = json.load(f)
     return j
+
+
+@app.get("/artifacts")
+def list_artifacts():
+    files = []
+    if OUTPUT_DIR.exists():
+        for f in sorted(OUTPUT_DIR.iterdir()):
+            if f.is_file():
+                files.append({
+                    "name": f.name,
+                    "url": f"/artifact/{f.name}",
+                    "suffix": f.suffix,
+                    "size": f.stat().st_size,
+                    "is_assessment": f.name.startswith("Assessment_Page"),
+                })
+    return {
+        "output_path": str(OUTPUT_DIR),
+        "artifacts": files,
+        "assessment_html": next((f"/artifact/{f['name']}" for f in files if f['name'] == 'Assessment_Page.html'), None),
+        "assessment_pdf": next((f"/artifact/{f['name']}" for f in files if f['name'] == 'Assessment_Page.pdf'), None),
+    }

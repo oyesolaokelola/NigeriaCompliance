@@ -2,6 +2,7 @@
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import shutil
+import textwrap
 
 import matplotlib.pyplot as plt
 from reportlab.lib.pagesizes import A4, letter
@@ -294,6 +295,88 @@ def generate_pdf_report(
     c.showPage()
     c.save()
     return path
+
+
+def generate_assessment_report(
+    assessment_text: str,
+    output_dir: Path,
+    template_profile: Optional[Any] = None,
+) -> Dict[str, Path]:
+    html_path = output_dir / "Assessment_Page.html"
+    pdf_path = output_dir / "Assessment_Page.pdf"
+
+    font_family = "Arial, sans-serif"
+    title_color = "#000000"
+    heading_color = "#333333"
+    body_color = "#000000"
+    logo_src = None
+
+    if template_profile:
+        if template_profile.body_font and template_profile.body_font.name:
+            font_family = template_profile.body_font.name
+        if template_profile.color_scheme:
+            title_color = f"#{template_profile.color_scheme.get('primary', '000000')}"
+            heading_color = f"#{template_profile.color_scheme.get('secondary', '333333')}"
+            body_color = f"#{template_profile.color_scheme.get('body', '000000')}"
+        if template_profile.logo_path:
+            logo_path = Path(template_profile.logo_path)
+            if logo_path.exists():
+                dest_logo = output_dir / logo_path.name
+                shutil.copy(logo_path, dest_logo)
+                logo_src = dest_logo.name
+
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write("<html><head><title>Assessment Page</title>")
+        f.write("<style>")
+        f.write("body { font-family: %s; color: %s; padding: 24px; line-height: 1.6; }" % (font_family, body_color))
+        f.write("h1 { font-size: 2.0em; color: %s; margin-bottom: 0.3em; }" % title_color)
+        f.write("h2 { font-size: 1.3em; color: %s; margin-top: 1.2em; }" % heading_color)
+        f.write("img.logo { max-width: 180px; margin-bottom: 16px; }")
+        f.write("</style></head><body>")
+        if logo_src:
+            f.write(f'<img class="logo" src="{logo_src}" alt="Template Logo">')
+        f.write("<h1>Assessment Page</h1>")
+        f.write("<h2>Template-Based Processing Summary</h2>")
+        for paragraph in assessment_text.split("\n\n"):
+            safe_paragraph = paragraph.strip().replace("\n", "<br>")
+            if safe_paragraph:
+                f.write(f"<p>{safe_paragraph}</p>")
+        f.write("</body></html>")
+
+    c = canvas.Canvas(str(pdf_path), pagesize=A4)
+    width, height = A4
+    y = height - 50
+    if logo_src:
+        try:
+            c.drawImage(str(output_dir / logo_src), 50, y - 80, width=180, height=60, preserveAspectRatio=True, mask='auto')
+            y -= 90
+        except Exception:
+            pass
+
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(50, y, "Assessment Page")
+    y -= 28
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(50, y, "Template-Based Processing Summary")
+    y -= 24
+
+    c.setFont("Helvetica", 10)
+    line_height = 14
+    wrapped_lines = []
+    for paragraph in assessment_text.split("\n\n"):
+        wrapped_lines.extend(textwrap.wrap(paragraph.replace("\n", " "), width=100))
+        wrapped_lines.append("")
+
+    for line in wrapped_lines:
+        if y < 60:
+            c.showPage()
+            y = height - 50
+            c.setFont("Helvetica", 10)
+        c.drawString(50, y, line)
+        y -= line_height
+
+    c.save()
+    return {"html": html_path, "pdf": pdf_path}
 
 
 def _map_pdf_font_name(font_name: Optional[str]) -> str:

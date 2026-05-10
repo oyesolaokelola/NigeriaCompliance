@@ -9,8 +9,18 @@ from .ingestion import discover_files
 from .extraction import extract_record
 from .aggregation import aggregate_records
 from .compliance import run_compliance_checks
-from .genai_agents import interpretation_agent, risk_analysis_agent, report_writer_agent
-from .reporting import create_summary_charts, generate_html_report, generate_pdf_report
+from .genai_agents import (
+    interpretation_agent,
+    risk_analysis_agent,
+    report_writer_agent,
+    template_assessment_agent,
+)
+from .reporting import (
+    create_summary_charts,
+    generate_html_report,
+    generate_pdf_report,
+    generate_assessment_report,
+)
 from .template_styling import TemplateManager, StyleApplier
 
 logger = logging.getLogger(__name__)
@@ -167,7 +177,12 @@ def process_repository(base_dir: Optional[str] = None, repo_dir: Optional[str] =
     html_path = generate_html_report(aggregated, status, issues, charts, narrative, output_dir_path, template_profile)
     pdf_path = generate_pdf_report(aggregated, status, issues, charts, narrative, output_dir_path, template_profile)
 
+    assessment_text = template_assessment_agent(template_profile, aggregated, status, issues, narrative)
+    assessment_paths = generate_assessment_report(assessment_text, output_dir_path, template_profile)
+
     result = {
+        "assessment_html": str(assessment_paths["html"]),
+        "assessment_pdf": str(assessment_paths["pdf"]),
         "aggregated": aggregated,
         "status": status,
         "issues": issues,

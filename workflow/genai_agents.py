@@ -4,6 +4,7 @@ import os
 import re
 import time
 from typing import List, Dict, Any
+from .template_styling import TemplateProfile
 
 # Ollama configuration
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -226,6 +227,47 @@ def interpretation_agent(raw_doc: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             parsed["confidence"] = None
     return parsed
+
+
+def template_assessment_agent(
+    template_profile: TemplateProfile,
+    aggregated: Dict[str, Any],
+    status: str,
+    issues: List[str],
+    narrative: str,
+) -> str:
+    system_prompt = (
+        "You are a document analysis auditor. You receive a template profile, "
+        "inferred template rules, structured aggregated financial data, compliance status, "
+        "issues detected, and the generated executive summary. "
+        "Write an assessment page describing: (1) what was done in the workflow, "
+        "(2) the implicit rules inferred from the template, and "
+        "(3) your thoughts on the assignment and whether the template was followed. "
+        "Be concise but thorough, and keep the tone professional."
+    )
+    user_prompt = (
+        f"Template name: {template_profile.template_name}\n"
+        f"Template path: {template_profile.template_path}\n"
+        f"Template implied rules: {json.dumps(template_profile.implied_rules, indent=2)}\n"
+        f"Template insights: {json.dumps(template_profile.template_insights, indent=2)}\n"
+        f"Aggregated status: {status}\n"
+        f"Detected issues: {json.dumps(issues, indent=2)}\n"
+        f"Executive summary: {narrative}\n"
+        f"Aggregated data:\n{json.dumps(aggregated, indent=2)}\n"
+        "Describe the template-based processing and the assignment outcome."
+    )
+    assessment = call_llm(system_prompt, user_prompt)
+
+    if not assessment.strip():
+        assessment = (
+            "Assessment page generated in fallback mode. "
+            "The workflow used the template profile and inferred rules to style the output, "
+            "and produced the compliance report with the detected issues. "
+            "Template rules inferred were: "
+            + ", ".join(template_profile.implied_rules or ["no explicit rules inferred"])
+            + "."
+        )
+    return assessment
 
 
 def risk_analysis_agent(aggregated: Dict[str, Any], issues: List[str]) -> str:
