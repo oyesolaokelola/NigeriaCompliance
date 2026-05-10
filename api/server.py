@@ -169,15 +169,33 @@ async def upload(file: UploadFile = File(...), department: str = Form("other")):
 async def upload_template(file: UploadFile = File(...), template_name: str = Form(None)):
     """Upload and register a style template document"""
     try:
-        # Store template file
-        filename = template_name or file.filename
-        template_path = TEMPLATES_DIR / f"{uuid.uuid4().hex}_{filename}"
+        # Determine filename with proper extension
+        base_filename = template_name or file.filename or "template"
+        
+        # Ensure filename has correct extension based on content-type
+        content_type = file.content_type or ""
+        if not Path(base_filename).suffix:
+            if "pdf" in content_type:
+                base_filename += ".pdf"
+            elif "wordprocessingml" in content_type or "docx" in base_filename.lower():
+                base_filename += ".docx"
+            else:
+                # Try to detect from file content (PDF files start with %PDF-)
+                content = await file.read(10)
+                await file.seek(0)  # Reset file pointer
+                if content.startswith(b"%PDF-"):
+                    base_filename += ".pdf"
+                else:
+                    raise ValueError("Could not determine template file format. Please ensure the file has a .pdf or .docx extension.")
+        
+        filename = f"{uuid.uuid4().hex}_{base_filename}"
+        template_path = TEMPLATES_DIR / filename
         content = await file.read()
         with open(template_path, "wb") as f:
             f.write(content)
         
         # Extract and register styling
-        profile = template_manager.register_template(str(template_path), template_name or filename)
+        profile = template_manager.register_template(str(template_path), template_name or Path(base_filename).stem)
         
         return {
             "success": True,
