@@ -84,6 +84,8 @@ class TemplateProfile:
     has_page_numbers: bool = False
     orientation: str = "portrait"
     logo_path: Optional[str] = None
+    implied_rules: List[str] = None
+    template_insights: Dict[str, Any] = None
     
 
     def __post_init__(self):
@@ -99,6 +101,10 @@ class TemplateProfile:
             self.section_styles = {}
         if self.color_scheme is None:
             self.color_scheme = {}
+        if self.implied_rules is None:
+            self.implied_rules = []
+        if self.template_insights is None:
+            self.template_insights = {}
 
 
 class TemplateExtractor:
@@ -169,6 +175,21 @@ class TemplateExtractor:
             # Extract logo or first image from the template
             profile.logo_path = self._extract_docx_logo(doc, template_path.parent, profile.template_name)
             
+            # Extract implicit template rules from structure and content
+            heading_texts = [para.text.strip() for para in doc.paragraphs if para.style and para.style.name and "heading" in para.style.name.lower()]
+            body_texts = [para.text.strip() for para in doc.paragraphs if para.text.strip()]
+            table_headers = []
+            for table in doc.tables:
+                if table.rows:
+                    row = table.rows[0]
+                    table_headers.extend([cell.text.strip() for cell in row.cells if cell.text.strip()])
+            profile.implied_rules = self._infer_template_rules(body_texts, heading_texts, table_headers, bool(profile.logo_path))
+            profile.template_insights = {
+                "headings": heading_texts[:10],
+                "table_headers": table_headers[:10],
+                "has_logo": bool(profile.logo_path),
+            }
+            
             # Extract table style if tables exist
             if doc.tables:
                 profile.table_style = doc.tables[0].style.name if doc.tables[0].style else profile.table_style
@@ -216,6 +237,13 @@ class TemplateExtractor:
                     }
                     
                     profile.logo_path = self._extract_pdf_logo(page, template_path.parent, profile.template_name)
+                    page_text = page.extract_text() or ""
+                    text_snippets = [line.strip() for line in page_text.splitlines() if line.strip()]
+                    profile.implied_rules = self._infer_template_rules(text_snippets, [], [], bool(profile.logo_path))
+                    profile.template_insights = {
+                        "text_snippets": text_snippets[:10],
+                        "has_logo": bool(profile.logo_path),
+                    }
             
             logger.info(f"Successfully extracted template profile from PDF {template_path}")
             return profile
@@ -275,6 +303,39 @@ class TemplateExtractor:
                 style.space_after = int(after)
         
         return style
+
+    def _infer_template_rules(self, body_texts: List[str], heading_texts: List[str], table_headers: List[str], has_logo: bool) -> List[str]:
+        """Infer implicit reporting and compliance rules from a template document."""
+        rules: List[str] = []
+        lower_text = " ".join(body_texts + heading_texts + table_headers).lower()
+        keywords = {
+            "revenue": "Include revenue or sales figures in the report when present.",
+            "payroll": "Capture payroll and labor cost metrics if they appear in the template.",
+            "vat": "Match VAT or tax-related calculations according to the template structure.",
+            "invoice": "Treat invoice line items and totals as core financial data.",
+            "vendor": "Consider procurement and vendor risk metrics when vendor sections appear.",
+            "risk": "Generate a risk analysis section when the template includes risk or compliance headings.",
+            "compliance": "Preserve compliance-related sections and summary blocks from the template.",
+            "net profit": "Use net profit or net amount as a key financial summary when available.",
+            "operational": "Include operations metrics if operational sections are present.",
+            "headcount": "Capture HR or headcount details if the template includes workforce information.",
+        }
+
+        for keyword, rule_text in keywords.items():
+            if keyword in lower_text and rule_text not in rules:
+                rules.append(rule_text)
+
+        if heading_texts:
+            rules.append("Honor the template section and heading structure when generating the report.")
+        if table_headers:
+            rules.append("Preserve table column semantics based on template table headers.")
+        if has_logo:
+            rules.insert(0, "Retain template branding and logo placement in generated outputs.")
+
+        if not rules:
+            rules.append("No explicit template rules were inferred; generate output based on the template style and structure.")
+
+        return rules
 
     def _rank_font_styles(self, font_styles: List[FontStyle]) -> Dict[str, FontStyle]:
         """Rank font styles dynamically based on template usage."""
