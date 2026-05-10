@@ -9,6 +9,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 # Ensure project root is importable
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -472,6 +473,21 @@ def process_status():
         }
 
 
+def _artifact_type_from_suffix(suffix: str) -> str:
+    ext = (suffix or "").lower()
+    if ext == ".pdf":
+        return "pdf"
+    if ext in {".html", ".htm"}:
+        return "html"
+    if ext in {".png", ".jpg", ".jpeg", ".gif", ".svg"}:
+        return "image"
+    if ext in {".docx", ".doc", ".txt"}:
+        return "document"
+    if ext == ".json":
+        return "json"
+    return "unknown"
+
+
 @app.get("/artifact/{filename}")
 def artifact(filename: str):
     path = OUTPUT_DIR / filename
@@ -496,16 +512,21 @@ def list_artifacts():
     if OUTPUT_DIR.exists():
         for f in sorted(OUTPUT_DIR.iterdir()):
             if f.is_file():
+                download_url = f"/artifact/{quote(f.name)}"
                 files.append({
                     "name": f.name,
-                    "url": f"/artifact/{f.name}",
+                    "filename": f.name,
+                    "label": f.name,
+                    "url": download_url,
+                    "download_url": download_url,
                     "suffix": f.suffix,
+                    "type": _artifact_type_from_suffix(f.suffix),
                     "size": f.stat().st_size,
                     "is_assessment": f.name.startswith("Assessment_Page"),
                 })
     return {
         "output_path": str(OUTPUT_DIR),
         "artifacts": files,
-        "assessment_html": next((f"/artifact/{f['name']}" for f in files if f['name'] == 'Assessment_Page.html'), None),
-        "assessment_pdf": next((f"/artifact/{f['name']}" for f in files if f['name'] == 'Assessment_Page.pdf'), None),
+        "assessment_html": next((f"/artifact/{quote(f['name'])}" for f in files if f['name'] == 'Assessment_Page.html'), None),
+        "assessment_pdf": next((f"/artifact/{quote(f['name'])}" for f in files if f['name'] == 'Assessment_Page.pdf'), None),
     }
