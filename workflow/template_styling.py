@@ -35,7 +35,12 @@ class FontStyle:
     size: int = 11
     bold: bool = False
     italic: bool = False
+    underline: bool = False
     color: str = "000000"  # RGB hex
+    highlight_color: str = None  # RGB hex for highlight
+    strike_through: bool = False
+    subscript: bool = False
+    superscript: bool = False
     
 
 @dataclass
@@ -47,6 +52,54 @@ class ParagraphStyle:
     space_after: int = 0
     indent_left: int = 0
     indent_right: int = 0
+    indent_first_line: int = 0
+    keep_with_next: bool = False
+    page_break_before: bool = False
+    widow_control: bool = True
+    shading_color: str = None  # RGB hex for paragraph background
+
+
+@dataclass
+class TableStyle:
+    """Extracted table styling information"""
+    style_name: str = "Light Grid Accent 1"
+    border_color: str = "000000"
+    border_width: int = 1
+    cell_padding: int = 0
+    header_background_color: str = None
+    header_font: FontStyle = None
+    body_font: FontStyle = None
+    banding: bool = True  # Alternating row colors
+    banding_color: str = None
+    
+    def __post_init__(self):
+        if self.header_font is None:
+            self.header_font = FontStyle()
+        if self.body_font is None:
+            self.body_font = FontStyle()
+
+
+@dataclass
+class ListStyle:
+    """Extracted list formatting information"""
+    list_type: str = "bullet"  # bullet, numbered, multilevel
+    bullet_char: str = "•"
+    numbering_format: str = "1."  # 1., a., i., etc.
+    indent_level: int = 0
+    indent_hanging: int = 720  # Twips
+    space_before: int = 0
+    space_after: int = 0
+
+
+@dataclass
+class ImageStyle:
+    """Extracted image styling information"""
+    width: float = 0  # In inches
+    height: float = 0  # In inches
+    alignment: str = "left"
+    wrap_text: bool = True
+    position_x: float = 0  # Normalized 0-100
+    position_y: float = 0  # Normalized 0-100
     
 
 @dataclass
@@ -77,15 +130,19 @@ class TemplateProfile:
     body_font: FontStyle = None
     paragraph_style: ParagraphStyle = None
     section_styles: Dict[str, SectionStyle] = None
-    table_style: str = "Light Grid Accent 1"
+    table_style: TableStyle = None
+    list_styles: Dict[str, ListStyle] = None
+    image_styles: List[ImageStyle] = None
     color_scheme: Dict[str, str] = None
     header_content: str = ""
     footer_content: str = ""
     has_page_numbers: bool = False
     orientation: str = "portrait"
     logo_path: Optional[str] = None
+    logo_style: ImageStyle = None
     implied_rules: List[str] = None
     template_insights: Dict[str, Any] = None
+    custom_styles: Dict[str, Dict[str, Any]] = None  # All custom style definitions
     
 
     def __post_init__(self):
@@ -99,12 +156,22 @@ class TemplateProfile:
             self.paragraph_style = ParagraphStyle()
         if self.section_styles is None:
             self.section_styles = {}
+        if self.table_style is None:
+            self.table_style = TableStyle()
+        if self.list_styles is None:
+            self.list_styles = {}
+        if self.image_styles is None:
+            self.image_styles = []
         if self.color_scheme is None:
             self.color_scheme = {}
+        if self.logo_style is None:
+            self.logo_style = ImageStyle()
         if self.implied_rules is None:
             self.implied_rules = []
         if self.template_insights is None:
             self.template_insights = {}
+        if self.custom_styles is None:
+            self.custom_styles = {}
 
 
 class TemplateExtractor:
@@ -114,7 +181,7 @@ class TemplateExtractor:
         self.supported_formats = ['.docx', '.pdf']
     
     def extract_from_docx(self, template_path: Path) -> TemplateProfile:
-        """Extract styling from a DOCX template"""
+        """Extract styling from a DOCX template with enhanced accuracy"""
         try:
             doc = Document(template_path)
             profile = TemplateProfile(
@@ -130,9 +197,12 @@ class TemplateExtractor:
             profile.margin_bottom = section.bottom_margin.twips
             profile.orientation = "landscape" if section.orientation == WD_ORIENT.LANDSCAPE else "portrait"
             
-            # Collect font samples from the template
+            # Extract all custom style definitions from the document
+            profile.custom_styles = self._extract_all_styles(doc)
+            
+            # Collect font samples with enhanced attributes
             font_samples = []
-            for para in doc.paragraphs[:40]:
+            for para in doc.paragraphs[:50]:
                 if not para.text.strip():
                     continue
                 for run in para.runs:
@@ -142,10 +212,16 @@ class TemplateExtractor:
                         size=int(font.size.pt) if font.size else 11,
                         bold=bool(font.bold),
                         italic=bool(font.italic),
-                        color=self._extract_font_color(font)
+                        underline=bool(font.underline),
+                        color=self._extract_font_color(font),
+                        highlight_color=self._extract_highlight_color(run),
+                        strike_through=bool(font.strike),
+                        subscript=bool(font.subscript),
+                        superscript=bool(font.superscript)
                     ))
             
-            ranked = self._rank_font_styles(font_samples)
+            # Use multi-factor ranking for font detection
+            ranked = self._rank_font_styles_enhanced(font_samples)
             profile.title_font = ranked.get("title", FontStyle(name="Calibri", size=28, bold=True))
             profile.heading_font = ranked.get("heading", FontStyle(name="Calibri", size=14, bold=True))
             profile.body_font = ranked.get("body", FontStyle(name="Calibri", size=11))
@@ -155,15 +231,29 @@ class TemplateExtractor:
                 "body": profile.body_font.color,
             }
             
-            # Extract paragraph style from the first meaningful paragraph
-            for para in doc.paragraphs:
+            # Extract paragraph styles from multiple paragraphs
+            paragraph_styles = []
+            for para in doc.paragraphs[:20]:
                 if para.text.strip():
                     pPr = para._element.pPr
                     if pPr is not None:
-                        profile.paragraph_style = self._extract_paragraph_style(pPr)
-                        break
+                        paragraph_styles.append(self._extract_paragraph_style(pPr))
             
-            # Extract header/footer text
+            # Use the most common paragraph style
+            if paragraph_styles:
+                profile.paragraph_style = self._select_most_common_paragraph_style(paragraph_styles)
+            
+            # Extract table styles with detailed information
+            if doc.tables:
+                profile.table_style = self._extract_table_style(doc.tables[0])
+            
+            # Extract list styles
+            profile.list_styles = self._extract_list_styles(doc)
+            
+            # Extract image styles
+            profile.image_styles = self._extract_image_styles(doc)
+            
+            # Extract header/footer text and styles
             if doc.sections[0].header.paragraphs:
                 header_text = " ".join([p.text for p in doc.sections[0].header.paragraphs if p.text.strip()])
                 profile.header_content = header_text[:150]
@@ -172,8 +262,8 @@ class TemplateExtractor:
                 profile.footer_content = footer_text[:150]
             profile.has_page_numbers = "page" in profile.footer_content.lower()
             
-            # Extract logo or first image from the template
-            profile.logo_path = self._extract_docx_logo(doc, template_path.parent, profile.template_name)
+            # Extract logo or first image from the template with positioning
+            profile.logo_path, profile.logo_style = self._extract_docx_logo_with_style(doc, template_path.parent, profile.template_name)
             
             # Extract implicit template rules from structure and content
             heading_texts = [para.text.strip() for para in doc.paragraphs if para.style and para.style.name and "heading" in para.style.name.lower()]
@@ -188,13 +278,12 @@ class TemplateExtractor:
                 "headings": heading_texts[:10],
                 "table_headers": table_headers[:10],
                 "has_logo": bool(profile.logo_path),
+                "total_paragraphs": len(doc.paragraphs),
+                "total_tables": len(doc.tables),
+                "total_images": len(profile.image_styles),
             }
             
-            # Extract table style if tables exist
-            if doc.tables:
-                profile.table_style = doc.tables[0].style.name if doc.tables[0].style else profile.table_style
-            
-            logger.info(f"Successfully extracted template profile from {template_path}")
+            logger.info(f"Successfully extracted enhanced template profile from {template_path}")
             return profile
         except Exception as e:
             logger.error(f"Error extracting DOCX template: {e}")
@@ -276,8 +365,305 @@ class TemplateExtractor:
             return "000000"
     
     @staticmethod
+    def _extract_highlight_color(run) -> str:
+        """Extract highlight color from text run"""
+        try:
+            if run.element.highlight:
+                color = run.element.highlight.val
+                # Convert highlight color to RGB hex
+                highlight_colors = {
+                    'yellow': 'FFFF00',
+                    'brightGreen': '00FF00',
+                    'turquoise': '00FFFF',
+                    'pink': 'FF00FF',
+                    'blue': '0000FF',
+                    'red': 'FF0000',
+                    'darkBlue': '00008B',
+                    'teal': '008080',
+                    'gray': '808080',
+                    'darkGray': 'A9A9A9',
+                    'lightGray': 'D3D3D3',
+                    'black': '000000',
+                }
+                return highlight_colors.get(color, None)
+            return None
+        except:
+            return None
+    
+    @staticmethod
+    def _extract_all_styles(doc: Document) -> Dict[str, Dict[str, Any]]:
+        """Extract all custom style definitions from the document"""
+        styles = {}
+        try:
+            for style in doc.styles:
+                if style.type == 1:  # Paragraph style
+                    styles[style.name] = {
+                        'type': 'paragraph',
+                        'font': {
+                            'name': style.font.name,
+                            'size': style.font.size.pt if style.font.size else 11,
+                            'bold': style.font.bold,
+                            'italic': style.font.italic,
+                            'color': style.font.color.rgb if style.font.color else '000000'
+                        },
+                        'paragraph': {
+                            'alignment': str(style.paragraph_format.alignment) if style.paragraph_format.alignment else 'left',
+                            'line_spacing': style.paragraph_format.line_spacing,
+                            'space_before': style.paragraph_format.space_before.pt if style.paragraph_format.space_before else 0,
+                            'space_after': style.paragraph_format.space_after.pt if style.paragraph_format.space_after else 0,
+                        }
+                    }
+                elif style.type == 2:  # Character style
+                    styles[style.name] = {
+                        'type': 'character',
+                        'font': {
+                            'name': style.font.name,
+                            'size': style.font.size.pt if style.font.size else 11,
+                            'bold': style.font.bold,
+                            'italic': style.font.italic,
+                            'color': style.font.color.rgb if style.font.color else '000000'
+                        }
+                    }
+        except Exception as e:
+            logger.warning(f"Error extracting styles: {e}")
+        return styles
+    
+    def _rank_font_styles_enhanced(self, font_styles: List[FontStyle]) -> Dict[str, FontStyle]:
+        """
+        Rank font styles using multi-factor analysis (size, bold, italic, color).
+        """
+        if not font_styles:
+            return {}
+
+        # Group by size first
+        size_groups: Dict[int, List[FontStyle]] = {}
+        for font in font_styles:
+            size_groups.setdefault(font.size, []).append(font)
+
+        unique_sizes = sorted(size_groups.keys(), reverse=True)
+        if not unique_sizes:
+            return {}
+
+        # Title: Largest size, usually bold
+        title_candidates = size_groups.get(unique_sizes[0], [])
+        title_font = self._select_most_likely_title(title_candidates)
+
+        # Heading: Second largest or largest non-bold
+        heading_candidates = size_groups.get(unique_sizes[1] if len(unique_sizes) > 1 else unique_sizes[0], [])
+        heading_font = self._select_most_likely_heading(heading_candidates)
+
+        # Body: Most common smaller size
+        body_size = unique_sizes[-1]
+        body_candidates = size_groups.get(body_size, [])
+        body_font = self._select_most_common_style(body_candidates)
+
+        return {
+            "title": title_font,
+            "heading": heading_font,
+            "body": body_font,
+        }
+    
+    def _select_most_likely_title(self, styles: List[FontStyle]) -> FontStyle:
+        """Select the most likely title font from candidates"""
+        if not styles:
+            return FontStyle(name="Calibri", size=28, bold=True)
+        
+        # Prefer bold, larger fonts
+        bold_styles = [s for s in styles if s.bold]
+        if bold_styles:
+            return self._select_most_common_style(bold_styles)
+        return self._select_most_common_style(styles)
+    
+    def _select_most_likely_heading(self, styles: List[FontStyle]) -> FontStyle:
+        """Select the most likely heading font from candidates"""
+        if not styles:
+            return FontStyle(name="Calibri", size=14, bold=True)
+        
+        # Prefer bold fonts for headings
+        bold_styles = [s for s in styles if s.bold]
+        if bold_styles:
+            return self._select_most_common_style(bold_styles)
+        return self._select_most_common_style(styles)
+    
+    def _select_most_common_paragraph_style(self, styles: List[ParagraphStyle]) -> ParagraphStyle:
+        """Select the most common paragraph style from a list"""
+        if not styles:
+            return ParagraphStyle()
+        
+        counts = Counter(
+            (s.alignment, s.line_spacing, s.space_before, s.space_after)
+            for s in styles
+        )
+        best_style_key = max(counts.items(), key=lambda item: item[1])[0]
+        for style in styles:
+            if (style.alignment, style.line_spacing, style.space_before, style.space_after) == best_style_key:
+                return style
+        return styles[0]
+    
+    def _extract_table_style(self, table) -> TableStyle:
+        """Extract detailed table styling information"""
+        table_style = TableStyle()
+        
+        try:
+            # Get table style name
+            if table.style:
+                table_style.style_name = table.style.name
+            
+            # Extract border information from first cell
+            if table.rows and table.rows[0].cells:
+                first_cell = table.rows[0].cells[0]
+                tcPr = first_cell._element.tcPr
+                if tcPr is not None:
+                    tcBorders = tcPr.find(qn('w:tcBorders'))
+                    if tcBorders is not None:
+                        # Extract border color and width
+                        top_border = tcBorders.find(qn('w:top'))
+                        if top_border is not None:
+                            table_style.border_color = top_border.get(qn('w:val'), '000000')
+                            table_style.border_width = int(top_border.get(qn('w:sz'), '4')) / 8  # Convert to points
+            
+            # Extract header font from first row
+            if table.rows:
+                header_row = table.rows[0]
+                if header_row.cells and header_row.cells[0].paragraphs:
+                    first_para = header_row.cells[0].paragraphs[0]
+                    if first_para.runs:
+                        run = first_para.runs[0]
+                        table_style.header_font = FontStyle(
+                            name=run.font.name or "Calibri",
+                            size=int(run.font.size.pt) if run.font.size else 11,
+                            bold=bool(run.font.bold),
+                            italic=bool(run.font.italic),
+                            color=self._extract_font_color(run.font)
+                        )
+            
+            # Extract body font from second row if available
+            if len(table.rows) > 1:
+                body_row = table.rows[1]
+                if body_row.cells and body_row.cells[0].paragraphs:
+                    first_para = body_row.cells[0].paragraphs[0]
+                    if first_para.runs:
+                        run = first_para.runs[0]
+                        table_style.body_font = FontStyle(
+                            name=run.font.name or "Calibri",
+                            size=int(run.font.size.pt) if run.font.size else 11,
+                            bold=bool(run.font.bold),
+                            italic=bool(run.font.italic),
+                            color=self._extract_font_color(run.font)
+                        )
+        
+        except Exception as e:
+            logger.warning(f"Error extracting table style: {e}")
+        
+        return table_style
+    
+    def _extract_list_styles(self, doc: Document) -> Dict[str, ListStyle]:
+        """Extract list formatting styles from the document"""
+        list_styles = {}
+        
+        try:
+            for para in doc.paragraphs:
+                if para.style and para.style.name:
+                    style_name = para.style.name.lower()
+                    if 'list' in style_name or 'bullet' in style_name:
+                        pPr = para._element.pPr
+                        if pPr is not None:
+                            numPr = pPr.find(qn('w:numPr'))
+                            if numPr is not None:
+                                list_style = ListStyle()
+                                
+                                # Extract numbering format
+                                ilvl = numPr.find(qn('w:ilvl'))
+                                if ilvl is not None:
+                                    list_style.indent_level = int(ilvl.get(qn('w:val'), '0'))
+                                
+                                numId = numPr.find(qn('w:numId'))
+                                if numId is not None:
+                                    # Try to determine list type from numbering
+                                    list_style.list_type = "numbered" if numId else "bullet"
+                                
+                                list_styles[para.style.name] = list_style
+        except Exception as e:
+            logger.warning(f"Error extracting list styles: {e}")
+        
+        return list_styles
+    
+    def _extract_image_styles(self, doc: Document) -> List[ImageStyle]:
+        """Extract image styling information from the document"""
+        image_styles = []
+        
+        try:
+            for rel in doc.part.rels.values():
+                if 'image' in rel.reltype:
+                    try:
+                        image_part = rel.target_part
+                        # Get image dimensions if available
+                        width = 0
+                        height = 0
+                        
+                        # Try to get dimensions from the relationship
+                        if hasattr(image_part, '_part'):
+                            try:
+                                from PIL import Image
+                                import io
+                                img = Image.open(io.BytesIO(image_part.blob))
+                                width, height = img.size
+                                # Convert pixels to inches (assuming 96 DPI)
+                                width = width / 96
+                                height = height / 96
+                            except:
+                                pass
+                        
+                        image_style = ImageStyle(
+                            width=width,
+                            height=height,
+                            alignment="left",
+                            wrap_text=True
+                        )
+                        image_styles.append(image_style)
+                    except Exception:
+                        continue
+        except Exception as e:
+            logger.warning(f"Error extracting image styles: {e}")
+        
+        return image_styles
+    
+    def _extract_docx_logo_with_style(self, doc: Document, template_dir: Path, template_name: str) -> tuple:
+        """Extract logo with positioning information"""
+        try:
+            for rel in doc.part.rels.values():
+                if 'image' in rel.reltype:
+                    try:
+                        image_part = rel.target_part
+                        image_bytes = image_part.blob
+                        ext = image_part.content_type.split('/')[-1]
+                        logo_name = f"{template_name}_logo.{ext}"
+                        logo_path = template_dir / logo_name
+                        with open(logo_path, "wb") as fh:
+                            fh.write(image_bytes)
+                        
+                        # Extract image style
+                        logo_style = ImageStyle()
+                        try:
+                            from PIL import Image
+                            import io
+                            img = Image.open(io.BytesIO(image_bytes))
+                            width, height = img.size
+                            logo_style.width = width / 96  # Convert to inches
+                            logo_style.height = height / 96
+                        except:
+                            pass
+                        
+                        return str(logo_path), logo_style
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        return None, ImageStyle()
+    
+    @staticmethod
     def _extract_paragraph_style(pPr) -> ParagraphStyle:
-        """Extract paragraph properties from OOXML element"""
+        """Extract enhanced paragraph properties from OOXML element"""
         style = ParagraphStyle()
         
         # Alignment
@@ -301,6 +687,39 @@ class TemplateExtractor:
                 style.space_before = int(before)
             if after:
                 style.space_after = int(after)
+        
+        # Indentation
+        ind = pPr.find(qn('w:ind'))
+        if ind is not None:
+            left = ind.get(qn('w:left'))
+            right = ind.get(qn('w:right'))
+            first_line = ind.get(qn('w:firstLine'))
+            if left:
+                style.indent_left = int(left)
+            if right:
+                style.indent_right = int(right)
+            if first_line:
+                style.indent_first_line = int(first_line)
+        
+        # Page break control
+        keep_next = pPr.find(qn('w:keepNext'))
+        if keep_next is not None:
+            style.keep_with_next = keep_next.get(qn('w:val')) == '1'
+        
+        page_break_before = pPr.find(qn('w:pageBreakBefore'))
+        if page_break_before is not None:
+            style.page_break_before = page_break_before.get(qn('w:val')) == '1'
+        
+        widow_control = pPr.find(qn('w:widowControl'))
+        if widow_control is not None:
+            style.widow_control = widow_control.get(qn('w:val')) != '0'
+        
+        # Shading
+        shd = pPr.find(qn('w:shd'))
+        if shd is not None:
+            fill = shd.get(qn('w:fill'))
+            if fill:
+                style.shading_color = fill
         
         return style
 
@@ -623,9 +1042,9 @@ class StyleApplier:
                     self._apply_font_style(para, self.profile.body_font)
                     self._apply_paragraph_style(para, self.profile.paragraph_style)
             
-            # Apply styles to tables
+            # Apply table styles with enhanced styling
             for table in doc.tables:
-                self._apply_table_style(table)
+                self._apply_table_style(table, self.profile.table_style)
             
             logger.info("Successfully applied template styles to document")
             return doc
@@ -634,14 +1053,129 @@ class StyleApplier:
             logger.error(f"Error applying template styles: {e}")
             return doc
     
+    def apply_to_template(self, content_data: Dict[str, Any], output_path: Path) -> Document:
+        """
+        Generate document by modifying the template in-place for accurate mirroring.
+        
+        This approach preserves exact layout, styling, and structure from the template.
+        
+        Args:
+            content_data: Dictionary containing content to insert:
+                - title: Document title
+                - sections: List of section dictionaries with 'heading' and 'content'
+                - tables: List of table data
+                - metadata: Additional metadata like date, author, etc.
+            output_path: Path where the generated document will be saved
+            
+        Returns:
+            Generated Document object
+        """
+        try:
+            # Load the template document
+            template_doc = Document(self.profile.template_path)
+            
+            # Replace title if present
+            if content_data.get('title'):
+                for para in template_doc.paragraphs[:5]:  # Check first 5 paragraphs for title
+                    if para.text.strip() and any(keyword in para.text.lower() for keyword in ['title', 'report', 'document']):
+                        para.text = content_data['title']
+                        break
+            
+            # Replace metadata placeholders
+            metadata = content_data.get('metadata', {})
+            for para in template_doc.paragraphs:
+                for key, value in metadata.items():
+                    placeholder = f"{{{key}}}"
+                    if placeholder in para.text:
+                        para.text = para.text.replace(placeholder, str(value))
+            
+            # Add sections content
+            sections = content_data.get('sections', [])
+            if sections:
+                # Find where to insert content (after title/intro)
+                insert_index = 0
+                for i, para in enumerate(template_doc.paragraphs):
+                    if para.text.strip():
+                        insert_index = i + 1
+                        break
+                
+                for section in sections:
+                    # Add heading
+                    if section.get('heading'):
+                        heading_para = template_doc.add_paragraph(section['heading'])
+                        heading_para.style = 'Heading 1'
+                        self._apply_font_style(heading_para, self.profile.heading_font)
+                    
+                    # Add content
+                    if section.get('content'):
+                        content_para = template_doc.add_paragraph(section['content'])
+                        self._apply_font_style(content_para, self.profile.body_font)
+                        self._apply_paragraph_style(content_para, self.profile.paragraph_style)
+            
+            # Add tables
+            tables_data = content_data.get('tables', [])
+            if tables_data:
+                for table_data in tables_data:
+                    self._add_table_to_template(template_doc, table_data)
+            
+            # Save the document
+            template_doc.save(output_path)
+            logger.info(f"Successfully generated document from template: {output_path}")
+            
+            return template_doc
+            
+        except Exception as e:
+            logger.error(f"Error generating document from template: {e}")
+            raise
+    
+    def _add_table_to_template(self, doc: Document, table_data: Dict[str, Any]):
+        """
+        Add a table to the template document with proper styling.
+        
+        Args:
+            doc: The template document
+            table_data: Dictionary containing table data:
+                - headers: List of column headers
+                - rows: List of row data (list of lists)
+        """
+        try:
+            headers = table_data.get('headers', [])
+            rows = table_data.get('rows', [])
+            
+            if not headers or not rows:
+                return
+            
+            # Create table
+            table = doc.add_table(rows=len(rows) + 1, cols=len(headers))
+            table.style = self.profile.table_style.style_name
+            
+            # Apply enhanced table styling
+            self._apply_table_style(table, self.profile.table_style)
+            
+            # Add headers
+            for i, header in enumerate(headers):
+                table.rows[0].cells[i].text = str(header)
+            
+            # Add data rows
+            for row_idx, row_data in enumerate(rows):
+                for col_idx, cell_data in enumerate(row_data):
+                    table.rows[row_idx + 1].cells[col_idx].text = str(cell_data)
+            
+        except Exception as e:
+            logger.error(f"Error adding table to template: {e}")
+    
     @staticmethod
     def _apply_font_style(para, font_style: FontStyle):
-        """Apply font styling to a paragraph"""
+        """Apply enhanced font styling to a paragraph"""
         for run in para.runs:
             run.font.name = font_style.name
             run.font.size = Pt(font_style.size)
             run.font.bold = font_style.bold
             run.font.italic = font_style.italic
+            run.font.underline = font_style.underline
+            run.font.strike = font_style.strike_through
+            run.font.subscript = font_style.subscript
+            run.font.superscript = font_style.superscript
             
             # Set color
             try:
@@ -649,10 +1183,21 @@ class StyleApplier:
                 run.font.color.rgb = RGBColor(*rgb)
             except:
                 pass
+            
+            # Set highlight color if available
+            if font_style.highlight_color:
+                try:
+                    from docx.oxml.shared import OxmlElement
+                    rPr = run._element.get_or_add_rPr()
+                    highlight = OxmlElement('w:highlight')
+                    highlight.set(qn('w:val'), font_style.highlight_color)
+                    rPr.append(highlight)
+                except:
+                    pass
     
     @staticmethod
     def _apply_paragraph_style(para, para_style: ParagraphStyle):
-        """Apply paragraph styling"""
+        """Apply enhanced paragraph styling"""
         pPr = para._element.get_or_add_pPr()
         
         # Set spacing
@@ -663,25 +1208,123 @@ class StyleApplier:
         pPr.append(spacing)
         
         # Set indentation
-        if para_style.indent_left > 0 or para_style.indent_right > 0:
+        if para_style.indent_left > 0 or para_style.indent_right > 0 or para_style.indent_first_line != 0:
             ind = OxmlElement('w:ind')
             ind.set(qn('w:left'), str(para_style.indent_left))
             ind.set(qn('w:right'), str(para_style.indent_right))
+            ind.set(qn('w:firstLine'), str(para_style.indent_first_line))
             pPr.append(ind)
+        
+        # Set alignment
+        jc = OxmlElement('w:jc')
+        align_map = {'left': 'left', 'center': 'center', 'right': 'right', 'justify': 'both'}
+        jc.set(qn('w:val'), align_map.get(para_style.alignment, 'left'))
+        pPr.append(jc)
+        
+        # Set page break control
+        if para_style.keep_with_next:
+            keep_next = OxmlElement('w:keepNext')
+            keep_next.set(qn('w:val'), '1')
+            pPr.append(keep_next)
+        
+        if para_style.page_break_before:
+            page_break = OxmlElement('w:pageBreakBefore')
+            page_break.set(qn('w:val'), '1')
+            pPr.append(page_break)
+        
+        if not para_style.widow_control:
+            widow_control = OxmlElement('w:widowControl')
+            widow_control.set(qn('w:val'), '0')
+            pPr.append(widow_control)
+        
+        # Set shading if available
+        if para_style.shading_color:
+            shd = OxmlElement('w:shd')
+            shd.set(qn('w:fill'), para_style.shading_color)
+            pPr.append(shd)
     
     @staticmethod
-    def _apply_table_style(table):
-        """Apply table styling"""
+    def _apply_table_style(table, table_style: TableStyle):
+        """Apply enhanced table styling with custom borders, shading, and fonts"""
         tbl = table._element
         tblPr = tbl.tblPr
         if tblPr is None:
             tblPr = OxmlElement('w:tblPr')
             tbl.insert(0, tblPr)
         
-        # Set table style
+        # Apply table style name
         tblStyle = OxmlElement('w:tblStyle')
-        tblStyle.set(qn('w:val'), 'LightGridAccent1')
+        tblStyle.set(qn('w:val'), table_style.style_name)
         tblPr.append(tblStyle)
+        
+        # Apply custom borders if specified
+        if table_style.border_color or table_style.border_width:
+            tblBorders = OxmlElement('w:tblBorders')
+            
+            for border_name in ['top', 'left', 'bottom', 'right', 'insideH', 'insideV']:
+                border = OxmlElement(f'w:{border_name}')
+                border.set(qn('w:val'), 'single')
+                border.set(qn('w:sz'), str(table_style.border_width * 8))  # Convert to eighths of a point
+                border.set(qn('w:color'), table_style.border_color)
+                tblBorders.append(border)
+            
+            tblPr.append(tblBorders)
+        
+        # Apply header row styling
+        if table.rows:
+            header_row = table.rows[0]
+            for cell in header_row.cells:
+                # Apply header background color
+                if table_style.header_background_color:
+                    tcPr = cell._element.tcPr
+                    if tcPr is None:
+                        tcPr = OxmlElement('w:tcPr')
+                        cell._element.append(tcPr)
+                    
+                    shd = OxmlElement('w:shd')
+                    shd.set(qn('w:fill'), table_style.header_background_color)
+                    tcPr.append(shd)
+                
+                # Apply header font
+                for para in cell.paragraphs:
+                    for run in para.runs:
+                        run.font.name = table_style.header_font.name
+                        run.font.size = Pt(table_style.header_font.size)
+                        run.font.bold = table_style.header_font.bold
+                        run.font.italic = table_style.header_font.italic
+                        try:
+                            rgb = bytes.fromhex(table_style.header_font.color)
+                            run.font.color.rgb = RGBColor(*rgb)
+                        except:
+                            pass
+        
+        # Apply body row styling
+        for i, row in enumerate(table.rows[1:], start=1):
+            # Apply banding if enabled
+            if table_style.banding and table_style.banding_color and i % 2 == 0:
+                for cell in row.cells:
+                    tcPr = cell._element.tcPr
+                    if tcPr is None:
+                        tcPr = OxmlElement('w:tcPr')
+                        cell._element.append(tcPr)
+                    
+                    shd = OxmlElement('w:shd')
+                    shd.set(qn('w:fill'), table_style.banding_color)
+                    tcPr.append(shd)
+            
+            # Apply body font
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    for run in para.runs:
+                        run.font.name = table_style.body_font.name
+                        run.font.size = Pt(table_style.body_font.size)
+                        run.font.bold = table_style.body_font.bold
+                        run.font.italic = table_style.body_font.italic
+                        try:
+                            rgb = bytes.fromhex(table_style.body_font.color)
+                            run.font.color.rgb = RGBColor(*rgb)
+                        except:
+                            pass
 
 
 class TemplateManager:
