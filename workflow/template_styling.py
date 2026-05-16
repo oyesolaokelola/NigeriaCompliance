@@ -1,28 +1,25 @@
 # workflow/template_styling.py
 """
-Template-based styling extraction and application.
+Template-based styling module for the NigeriaCompliance workflow.
 
-This module handles:
-1. Extracting styling information (fonts, colors, spacing, layouts) from template documents
-2. Storing styling profiles for reuse
-3. Applying extracted styles to generated output documents
-4. Supporting multiple template formats (DOCX, PDF)
+This module provides functionality to extract styling information from template documents
+and apply those styles to generated documents, ensuring consistent formatting across reports.
 """
 
-import json
 import logging
-from collections import Counter
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple
-from dataclasses import dataclass, asdict
-import re
+from typing import Dict, List, Optional, Any
+from dataclasses import dataclass, field
+from collections import Counter
+import tempfile
+import shutil
 
 from docx import Document
-from docx.shared import Inches, Pt, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.section import WD_ORIENT
+from docx.shared import Pt, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_ORIENT
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+
 import pdfplumber
 
 logger = logging.getLogger(__name__)
@@ -174,11 +171,100 @@ class TemplateProfile:
             self.custom_styles = {}
 
 
+class PDFConverter:
+    """Utility for converting PDF to DOCX for enhanced template extraction"""
+    
+    @staticmethod
+    def convert_pdf_to_docx(pdf_path: Path, output_dir: Path = None) -> Path:
+        """
+        Convert PDF to DOCX using pdf2docx library.
+        
+        Args:
+            pdf_path: Path to the PDF file
+            output_dir: Directory to save the converted DOCX (defaults to same as PDF)
+            
+        Returns:
+            Path to the converted DOCX file
+            
+        Raises:
+            ImportError: If pdf2docx is not installed
+            Exception: If conversion fails
+        """
+        try:
+            from pdf2docx import Converter
+        except ImportError:
+            raise ImportError(
+                "pdf2docx library is required for PDF to DOCX conversion. "
+                "Install it with: pip install pdf2docx"
+            )
+        
+        if output_dir is None:
+            output_dir = pdf_path.parent
+        
+        docx_path = output_dir / f"{pdf_path.stem}.docx"
+        
+        try:
+            logger.info(f"Converting PDF to DOCX: {pdf_path}")
+            cv = Converter(str(pdf_path))
+            cv.convert(str(docx_path))
+            cv.close()
+            logger.info(f"Successfully converted PDF to DOCX: {docx_path}")
+            return docx_path
+        except Exception as e:
+            logger.error(f"Error converting PDF to DOCX: {e}")
+            raise
+    
+    @staticmethod
+    def convert_pdf_to_docx_fallback(pdf_path: Path, output_dir: Path = None) -> Path:
+        """
+        Fallback method to convert PDF to DOCX using pdfplumber.
+        This is less accurate but works without pdf2docx.
+        
+        Args:
+            pdf_path: Path to the PDF file
+            output_dir: Directory to save the converted DOCX (defaults to same as PDF)
+            
+        Returns:
+            Path to the converted DOCX file
+        """
+        if output_dir is None:
+            output_dir = pdf_path.parent
+        
+        docx_path = output_dir / f"{pdf_path.stem}.docx"
+        
+        try:
+            logger.info(f"Converting PDF to DOCX using fallback method: {pdf_path}")
+            doc = Document()
+            
+            with pdfplumber.open(pdf_path) as pdf:
+                for page in pdf.pages:
+                    text = page.extract_text()
+                    if text:
+                        doc.add_paragraph(text)
+                    
+                    # Extract tables
+                    tables = page.extract_tables()
+                    for table_data in tables:
+                        if table_data:
+                            table = doc.add_table(rows=len(table_data), cols=len(table_data[0]))
+                            for i, row in enumerate(table_data):
+                                for j, cell in enumerate(row):
+                                    table.rows[i].cells[j].text = str(cell) if cell else ""
+            
+            doc.save(docx_path)
+            logger.info(f"Successfully converted PDF to DOCX using fallback: {docx_path}")
+            return docx_path
+        except Exception as e:
+            logger.error(f"Error converting PDF to DOCX using fallback: {e}")
+            raise
+
+
 class TemplateExtractor:
     """Extracts styling information from template documents"""
     
     def __init__(self):
         self.supported_formats = ['.docx', '.pdf']
+        self.converter = PDFConverter()
     
     def extract_from_docx(self, template_path: Path) -> TemplateProfile:
         """Extract styling from a DOCX template with enhanced accuracy"""
@@ -340,19 +426,47 @@ class TemplateExtractor:
             logger.error(f"Error extracting PDF template: {e}")
             raise
     
-    def extract(self, template_path: str) -> TemplateProfile:
-        """Extract styling from any supported template format"""
-        path = Path(template_path)
+    def extract(self, template_path: str, convert_pdf: bool = True) -> TemplateProfile:
+        """
+        Extract template profile from file (auto-detect format).
         
+        Args:
+            template_path: Path to the template file
+            convert_pdf: If True, convert PDF to DOCX before extraction for enhanced accuracy
+            
+        Returns:
+            TemplateProfile with extracted styling information
+        """
+        path = Path(template_path)
         if not path.exists():
             raise FileNotFoundError(f"Template file not found: {template_path}")
         
-        if path.suffix.lower() == '.docx':
+        suffix = path.suffix.lower()
+        if suffix == '.docx':
             return self.extract_from_docx(path)
-        elif path.suffix.lower() == '.pdf':
-            return self.extract_from_pdf(path)
+        elif suffix == '.pdf':
+            if convert_pdf:
+                # Convert PDF to DOCX for enhanced extraction
+                try:
+                    docx_path = self.converter.convert_pdf_to_docx(path)
+                    logger.info(f"Using converted DOCX for enhanced extraction: {docx_path}")
+                    profile = self.extract_from_docx(docx_path)
+                    # Update template path to point to the original PDF
+                    profile.template_path = str(path)
+                    return profile
+                except ImportError:
+                    logger.warning("pdf2docx not available, using fallback conversion")
+                    docx_path = self.converter.convert_pdf_to_docx_fallback(path)
+                    profile = self.extract_from_docx(docx_path)
+                    profile.template_path = str(path)
+                    return profile
+                except Exception as e:
+                    logger.warning(f"PDF conversion failed, using basic PDF extraction: {e}")
+                    return self.extract_from_pdf(path)
+            else:
+                return self.extract_from_pdf(path)
         else:
-            raise ValueError(f"Unsupported template format: {path.suffix}")
+            raise ValueError(f"Unsupported template format: {suffix}")
     
     @staticmethod
     def _extract_font_color(font) -> str:
