@@ -424,6 +424,173 @@ class StyleApplier:
     def __init__(self, template_profile: TemplateProfile):
         self.profile = template_profile
     
+    def apply_html_content(self, doc: Document, html_content: str, layout_elements: List[Dict[str, Any]] = None) -> Document:
+        """
+        Apply HTML content from multimodal parser to DOCX document.
+        
+        Args:
+            doc: The DOCX document to modify
+            html_content: HTML content containing tables and structured elements
+            layout_elements: Optional list of layout elements with bounding boxes
+            
+        Returns:
+            Modified DOCX document
+        """
+        try:
+            # Parse HTML content
+            try:
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(html_content, 'html.parser')
+            except ImportError:
+                logger.warning("BeautifulSoup not available, cannot parse HTML content")
+                return doc
+            
+            # Process each div with layout information
+            if layout_elements:
+                for element in layout_elements:
+                    self._apply_layout_element(doc, element)
+            
+            # Process tables from HTML
+            for table in soup.find_all('table'):
+                self._add_html_table_to_docx(doc, table)
+            
+            # Process text content
+            for div in soup.find_all('div'):
+                # Skip if it's a table container
+                if div.find('table'):
+                    continue
+                
+                # Get the category from data-label if available
+                category = div.get('data-label', 'Text')
+                content = div.get_text(strip=True)
+                
+                if content:
+                    self._add_content_by_category(doc, content, category)
+            
+            logger.info("Successfully applied HTML content to document")
+            return doc
+            
+        except Exception as e:
+            logger.error(f"Error applying HTML content: {e}")
+            return doc
+    
+    def _add_html_table_to_docx(self, doc: Document, html_table):
+        """
+        Convert an HTML table with colspan/rowspan to a DOCX table.
+        
+        Args:
+            doc: The DOCX document
+            html_table: BeautifulSoup table element
+        """
+        try:
+            rows = html_table.find_all('tr')
+            if not rows:
+                return
+            
+            # Determine grid dimensions accounting for colspan/rowspan
+            max_cols = 0
+            for row in rows:
+                col_count = 0
+                for cell in row.find_all(['td', 'th']):
+                    col_count += int(cell.get('colspan', 1))
+                max_cols = max(max_cols, col_count)
+            
+            if max_cols == 0:
+                return
+            
+            # Create DOCX table
+            table = doc.add_table(rows=len(rows), cols=max_cols)
+            table.style = self.profile.table_style
+            
+            # Track which cells are already filled due to rowspan
+            cell_tracker = [[False for _ in range(max_cols)] for _ in range(len(rows))]
+            
+            # Fill the table
+            for row_idx, row in enumerate(rows):
+                docx_row = table.rows[row_idx]
+                col_idx = 0
+                
+                for cell in row.find_all(['td', 'th']):
+                    # Find next available column
+                    while col_idx < max_cols and cell_tracker[row_idx][col_idx]:
+                        col_idx += 1
+                    
+                    if col_idx >= max_cols:
+                        break
+                    
+                    colspan = int(cell.get('colspan', 1))
+                    rowspan = int(cell.get('rowspan', 1))
+                    cell_text = cell.get_text(strip=True)
+                    
+                    # Set cell text
+                    docx_cell = docx_row.cells[col_idx]
+                    docx_cell.text = cell_text
+                    
+                    # Mark cells affected by rowspan
+                    for r in range(row_idx, min(row_idx + rowspan, len(rows))):
+                        for c in range(col_idx, min(col_idx + colspan, max_cols)):
+                            if r < len(cell_tracker) and c < len(cell_tracker[r]):
+                                cell_tracker[r][c] = True
+                    
+                    # Apply colspan in DOCX (merge cells horizontally)
+                    if colspan > 1 and col_idx + colspan <= max_cols:
+                        merged_cell = docx_row.cells[col_idx]
+                        for c in range(col_idx + 1, min(col_idx + colspan, max_cols)):
+                            try:
+                                merged_cell.merge(docx_row.cells[c])
+                            except:
+                                pass
+                    
+                    col_idx += colspan
+            
+        except Exception as e:
+            logger.error(f"Error converting HTML table to DOCX: {e}")
+    
+    def _apply_layout_element(self, doc: Document, element: Dict[str, Any]):
+        """
+        Apply a layout element with bounding box information.
+        
+        Args:
+            doc: The DOCX document
+            element: Dictionary with bbox, category, and content
+        """
+        category = element.get('category', 'Text')
+        content = element.get('content', '').strip()
+        
+        if content:
+            self._add_content_by_category(doc, content, category)
+    
+    def _add_content_by_category(self, doc: Document, content: str, category: str):
+        """
+        Add content to document based on its category.
+        
+        Args:
+            doc: The DOCX document
+            content: The text content
+            category: The element category (Title, Section-header, Text, Table, etc.)
+        """
+        if category == 'Title':
+            para = doc.add_paragraph(content)
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            self._apply_font_style(para, self.profile.title_font)
+        elif category == 'Section-header':
+            para = doc.add_paragraph(content)
+            self._apply_font_style(para, self.profile.heading_font)
+        elif category == 'Text':
+            para = doc.add_paragraph(content)
+            self._apply_font_style(para, self.profile.body_font)
+            self._apply_paragraph_style(para, self.profile.paragraph_style)
+        elif category == 'Caption':
+            para = doc.add_paragraph(content)
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            self._apply_font_style(para, FontStyle(name=self.profile.body_font.name, 
+                                                   size=self.profile.body_font.size - 1,
+                                                   italic=True))
+        else:
+            # Default to body text for other categories
+            para = doc.add_paragraph(content)
+            self._apply_font_style(para, self.profile.body_font)
+    
     def apply_to_docx(self, doc: Document) -> Document:
         """Apply template styling to a DOCX document"""
         try:

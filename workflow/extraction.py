@@ -6,6 +6,9 @@ import pandas as pd
 from docx import Document
 import pytesseract
 from PIL import Image
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_ocr_image(img: Image.Image) -> str:
@@ -70,7 +73,59 @@ def extract_text_file(path: Path) -> Dict[str, Any]:
     }
 
 
-def extract_pdf(path: Path) -> Dict[str, Any]:
+def extract_pdf(path: Path, use_multimodal_parser: bool = False, parser_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Extract content from a PDF file.
+    
+    Args:
+        path: Path to the PDF file
+        use_multimodal_parser: If True, use the multimodal LLM parser for accurate layout extraction
+        parser_config: Configuration dict for multimodal parser (model_provider, model, etc.)
+    
+    Returns:
+        Dictionary containing raw_text, raw_tables, source_path, file_type, and optionally
+        html_content and layout_elements if using multimodal parser
+    """
+    # Use multimodal parser if requested
+    if use_multimodal_parser:
+        try:
+            from .multimodal_parser import MultimodalParser
+            
+            config = parser_config or {}
+            parser = MultimodalParser(
+                model_provider=config.get("model_provider", "openai"),
+                model=config.get("model", "gpt-4o"),
+                reasoning_effort=config.get("reasoning_effort", "low"),
+                merge_table=config.get("merge_table", True),
+                create_html=config.get("create_html", True),
+                additional_instructions=config.get("additional_instructions"),
+                api_key=config.get("api_key")
+            )
+            
+            result = parser.parse(str(path))
+            
+            # Extract tables from HTML if available
+            tables = _extract_tables_from_html(result.clean_markdown) if result.clean_markdown else []
+            
+            return {
+                "raw_text": result.clean_markdown,
+                "raw_tables": tables,
+                "source_path": str(path),
+                "file_type": "pdf",
+                "html_content": result.html,
+                "layout_elements": result.layout_elements,
+                "usage": {
+                    "input_tokens": result.usage.input_tokens,
+                    "output_tokens": result.usage.output_tokens,
+                    "estimated_cost_usd": result.usage.estimated_cost_usd
+                }
+            }
+        except ImportError:
+            logger.warning("Multimodal parser requested but not available, falling back to pdfplumber")
+        except Exception as e:
+            logger.error(f"Multimodal parser failed: {e}, falling back to pdfplumber")
+    
+    # Fallback to traditional extraction
     text_chunks = []
     tables: List[List[List[str]]] = []
     text_chars = 0
@@ -137,6 +192,48 @@ def extract_pdf(path: Path) -> Dict[str, Any]:
     }
 
 
+def _extract_tables_from_html(html_content: str) -> List[List[List[str]]]:
+    """
+    Extract table data from HTML content containing HTML tables.
+    
+    This is a simple implementation that parses HTML tables and converts
+    them to the nested list format expected by the extraction pipeline.
+    """
+    try:
+        from bs4 import BeautifulSoup
+        
+        soup = BeautifulSoup(html_content, 'html.parser')
+        tables_data = []
+        
+        for table in soup.find_all('table'):
+            table_data = []
+            for row in table.find_all('tr'):
+                row_data = []
+                for cell in row.find_all(['td', 'th']):
+                    # Handle colspan and rowspan by repeating cells
+                    colspan = int(cell.get('colspan', 1))
+                    rowspan = int(cell.get('rowspan', 1))
+                    cell_text = cell.get_text(strip=True)
+                    
+                    # Simple handling: repeat cell text for colspan
+                    for _ in range(colspan):
+                        row_data.append(cell_text)
+                
+                if row_data:
+                    table_data.append(row_data)
+            
+            if table_data:
+                tables_data.append(table_data)
+        
+        return tables_data
+    except ImportError:
+        logger.warning("BeautifulSoup not available, cannot extract tables from HTML")
+        return []
+    except Exception as e:
+        logger.error(f"Error extracting tables from HTML: {e}")
+        return []
+
+
 def extract_image(path: Path) -> Dict[str, Any]:
     img = Image.open(path)
     text = _safe_ocr_image(img)
@@ -148,7 +245,18 @@ def extract_image(path: Path) -> Dict[str, Any]:
     }
 
 
-def extract_record(file_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def extract_record(file_info: Dict[str, Any], use_multimodal_parser: bool = False, parser_config: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """
+    Extract content from a file record.
+    
+    Args:
+        file_info: Dictionary containing file path and metadata
+        use_multimodal_parser: If True, use multimodal parser for PDF files
+        parser_config: Configuration dict for multimodal parser
+    
+    Returns:
+        Dictionary containing extracted content or None if unsupported format
+    """
     path = file_info["path"]
     suffix = path.suffix.lower()
 
@@ -157,7 +265,7 @@ def extract_record(file_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     elif suffix in [".xlsx", ".xls"]:
         base = extract_excel(path)
     elif suffix == ".pdf":
-        base = extract_pdf(path)
+        base = extract_pdf(path, use_multimodal_parser=use_multimodal_parser, parser_config=parser_config)
     elif suffix == ".csv":
         base = extract_csv(path)
     elif suffix == ".txt":
