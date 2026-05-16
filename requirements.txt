@@ -1,6 +1,7 @@
 pandas
 python-docx
 pdfplumber
+pdf2docx
 pytesseract
 Pillow
 matplotlib
