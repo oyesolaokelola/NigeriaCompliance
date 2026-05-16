@@ -70,6 +70,7 @@ PROCESS_STATUS = {
     "last_error_type": None,
     "last_message": None,
     "active_template": None,
+    "generation_mode": "apply",
 }
 
 
@@ -175,9 +176,11 @@ async def upload_template(file: UploadFile = File(...), template_name: str = For
         
         # Ensure filename has correct extension based on content-type
         content_type = file.content_type or ""
+        is_pdf = False
         if not Path(base_filename).suffix:
             if "pdf" in content_type:
                 base_filename += ".pdf"
+                is_pdf = True
             elif "wordprocessingml" in content_type or "docx" in base_filename.lower():
                 base_filename += ".docx"
             else:
@@ -186,8 +189,11 @@ async def upload_template(file: UploadFile = File(...), template_name: str = For
                 await file.seek(0)  # Reset file pointer
                 if content.startswith(b"%PDF-"):
                     base_filename += ".pdf"
+                    is_pdf = True
                 else:
                     raise ValueError("Could not determine template file format. Please ensure the file has a .pdf or .docx extension.")
+        else:
+            is_pdf = Path(base_filename).suffix.lower() == ".pdf"
         
         filename = f"{uuid.uuid4().hex}_{base_filename}"
         template_path = TEMPLATES_DIR / filename
@@ -198,11 +204,13 @@ async def upload_template(file: UploadFile = File(...), template_name: str = For
         # Extract and register styling
         profile = template_manager.register_template(str(template_path), template_name or Path(base_filename).stem)
         
-        return {
+        response_data = {
             "success": True,
             "template_name": profile.template_name,
             "template_path": str(template_path),
             "message": f"Template '{profile.template_name}' registered successfully",
+            "pdf_converted": is_pdf,
+            "conversion_method": None,
             "styles": {
                 "title_font": {
                     "name": profile.title_font.name,
@@ -220,6 +228,14 @@ async def upload_template(file: UploadFile = File(...), template_name: str = For
                 }
             }
         }
+        
+        # Add conversion info if PDF was converted
+        if is_pdf:
+            response_data["pdf_converted"] = True
+            response_data["conversion_method"] = "pdf2docx"
+            response_data["message"] = f"PDF converted to DOCX for enhanced extraction. Template '{profile.template_name}' registered successfully"
+        
+        return response_data
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Template upload failed: {str(e)}")
 
@@ -273,8 +289,85 @@ def get_template_info(template_name: str):
         if not profile:
             raise HTTPException(status_code=404, detail=f"Template '{template_name}' not found")
         
+        # Helper function to convert FontStyle to dict
+        def font_style_to_dict(font):
+            return {
+                "name": font.name,
+                "size": font.size,
+                "bold": font.bold,
+                "italic": font.italic,
+                "underline": font.underline,
+                "color": font.color,
+                "highlight_color": font.highlight_color,
+                "strike_through": font.strike_through,
+                "subscript": font.subscript,
+                "superscript": font.superscript
+            }
+        
+        # Helper function to convert TableStyle to dict
+        def table_style_to_dict(table_style):
+            return {
+                "style_name": table_style.style_name,
+                "border_color": table_style.border_color,
+                "border_width": table_style.border_width,
+                "cell_padding": table_style.cell_padding,
+                "header_background_color": table_style.header_background_color,
+                "header_font": font_style_to_dict(table_style.header_font) if table_style.header_font else None,
+                "body_font": font_style_to_dict(table_style.body_font) if table_style.body_font else None,
+                "banding": table_style.banding,
+                "banding_color": table_style.banding_color
+            }
+        
+        # Helper function to convert ListStyle to dict
+        def list_style_to_dict(list_style):
+            return {
+                "list_type": list_style.list_type,
+                "bullet_char": list_style.bullet_char,
+                "numbering_format": list_style.numbering_format,
+                "indent_level": list_style.indent_level,
+                "indent_hanging": list_style.indent_hanging,
+                "space_before": list_style.space_before,
+                "space_after": list_style.space_after
+            }
+        
+        # Helper function to convert ImageStyle to dict
+        def image_style_to_dict(image_style):
+            return {
+                "width": image_style.width,
+                "height": image_style.height,
+                "alignment": image_style.alignment,
+                "wrap_text": image_style.wrap_text,
+                "position_x": image_style.position_x,
+                "position_y": image_style.position_y
+            }
+        
+        # Helper function to convert ParagraphStyle to dict
+        def paragraph_style_to_dict(para_style):
+            return {
+                "alignment": para_style.alignment,
+                "line_spacing": para_style.line_spacing,
+                "space_before": para_style.space_before,
+                "space_after": para_style.space_after,
+                "indent_left": para_style.indent_left,
+                "indent_right": para_style.indent_right,
+                "indent_first_line": para_style.indent_first_line,
+                "keep_with_next": para_style.keep_with_next,
+                "page_break_before": para_style.page_break_before,
+                "widow_control": para_style.widow_control,
+                "shading_color": para_style.shading_color
+            }
+        
+        # Convert list styles dict to serializable format
+        list_styles_serializable = {}
+        for key, value in profile.list_styles.items():
+            list_styles_serializable[key] = list_style_to_dict(value)
+        
+        # Convert image styles list to serializable format
+        image_styles_serializable = [image_style_to_dict(img) for img in profile.image_styles]
+        
         return {
             "template_name": profile.template_name,
+            "template_path": profile.template_path,
             "margins": {
                 "left": profile.margin_left,
                 "right": profile.margin_right,
@@ -282,33 +375,28 @@ def get_template_info(template_name: str):
                 "bottom": profile.margin_bottom
             },
             "fonts": {
-                "title": {
-                    "name": profile.title_font.name,
-                    "size": profile.title_font.size,
-                    "bold": profile.title_font.bold,
-                    "italic": profile.title_font.italic,
-                    "color": profile.title_font.color
-                },
-                "heading": {
-                    "name": profile.heading_font.name,
-                    "size": profile.heading_font.size,
-                    "bold": profile.heading_font.bold,
-                    "italic": profile.heading_font.italic,
-                    "color": profile.heading_font.color
-                },
-                "body": {
-                    "name": profile.body_font.name,
-                    "size": profile.body_font.size,
-                    "bold": profile.body_font.bold,
-                    "italic": profile.body_font.italic,
-                    "color": profile.body_font.color
-                }
+                "title": font_style_to_dict(profile.title_font),
+                "heading": font_style_to_dict(profile.heading_font),
+                "body": font_style_to_dict(profile.body_font)
             },
+            "paragraph_style": paragraph_style_to_dict(profile.paragraph_style),
+            "table_style": table_style_to_dict(profile.table_style),
+            "list_styles": list_styles_serializable,
+            "image_styles": image_styles_serializable,
+            "logo_style": image_style_to_dict(profile.logo_style) if profile.logo_style else None,
+            "logo_path": profile.logo_path,
             "page": {
                 "width": profile.page_width,
                 "height": profile.page_height,
                 "orientation": profile.orientation
-            }
+            },
+            "header_content": profile.header_content,
+            "footer_content": profile.footer_content,
+            "has_page_numbers": profile.has_page_numbers,
+            "color_scheme": profile.color_scheme,
+            "implied_rules": profile.implied_rules,
+            "template_insights": profile.template_insights,
+            "custom_styles_count": len(profile.custom_styles) if profile.custom_styles else 0
         }
     except HTTPException:
         raise
@@ -440,7 +528,20 @@ def debug_processing_files():
 
 
 @app.post("/process")
-def process_endpoint():
+def process_endpoint(generation_mode: str = Form("apply")):
+    """
+    Start processing with the active template.
+    
+    Args:
+        generation_mode: "apply" to apply styles to new document, "modify" to modify template in-place
+    """
+    # Validate generation_mode
+    if generation_mode not in ["apply", "modify"]:
+        raise HTTPException(status_code=400, detail="generation_mode must be 'apply' or 'modify'")
+    
+    # Store generation_mode in process status
+    _update_status(generation_mode=generation_mode)
+    
     started = _start_background_process()
     if not started:
         return {
@@ -451,8 +552,9 @@ def process_endpoint():
 
     return {
         "success": True,
-        "message": "Processing started in the background.",
+        "message": f"Processing started in the background with generation_mode='{generation_mode}'.",
         "running": True,
+        "generation_mode": generation_mode,
         "status_url": "/process/status",
         "aggregated_url": "/aggregated",
         "artifact_list_url": "/artifacts",
