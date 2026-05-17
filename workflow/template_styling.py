@@ -16,7 +16,11 @@ import shutil
 
 from docx import Document
 from docx.shared import Pt, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_ORIENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+try:
+    from docx.enum.section import WD_ORIENT
+except ImportError:
+    from docx.enum.text import WD_ORIENT
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
@@ -193,10 +197,8 @@ class PDFConverter:
         try:
             from pdf2docx import Converter
         except ImportError:
-            raise ImportError(
-                "pdf2docx library is required for PDF to DOCX conversion. "
-                "Install it with: pip install pdf2docx"
-            )
+            logger.warning("pdf2docx library not available, using fallback conversion")
+            return PDFConverter.convert_pdf_to_docx_fallback(pdf_path, output_dir)
         
         if output_dir is None:
             output_dir = pdf_path.parent
@@ -212,7 +214,9 @@ class PDFConverter:
             return docx_path
         except Exception as e:
             logger.error(f"Error converting PDF to DOCX: {e}")
-            raise
+            # Fall back to basic conversion if pdf2docx fails
+            logger.info("Falling back to basic PDF conversion")
+            return PDFConverter.convert_pdf_to_docx_fallback(pdf_path, output_dir)
     
     @staticmethod
     def convert_pdf_to_docx_fallback(pdf_path: Path, output_dir: Path = None) -> Path:
