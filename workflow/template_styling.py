@@ -1297,8 +1297,10 @@ class StyleApplier:
             
             # Set color
             try:
-                rgb = bytes.fromhex(font_style.color)
-                run.font.color.rgb = RGBColor(*rgb)
+                if font_style.color and len(font_style.color) == 6:
+                    rgb = bytes.fromhex(font_style.color)
+                    if len(rgb) == 3:
+                        run.font.color.rgb = RGBColor(*rgb)
             except:
                 pass
             
@@ -1411,8 +1413,10 @@ class StyleApplier:
                         run.font.bold = table_style.header_font.bold
                         run.font.italic = table_style.header_font.italic
                         try:
-                            rgb = bytes.fromhex(table_style.header_font.color)
-                            run.font.color.rgb = RGBColor(*rgb)
+                            if table_style.header_font.color and len(table_style.header_font.color) == 6:
+                                rgb = bytes.fromhex(table_style.header_font.color)
+                                if len(rgb) == 3:
+                                    run.font.color.rgb = RGBColor(*rgb)
                         except:
                             pass
         
@@ -1439,8 +1443,10 @@ class StyleApplier:
                         run.font.bold = table_style.body_font.bold
                         run.font.italic = table_style.body_font.italic
                         try:
-                            rgb = bytes.fromhex(table_style.body_font.color)
-                            run.font.color.rgb = RGBColor(*rgb)
+                            if table_style.body_font.color and len(table_style.body_font.color) == 6:
+                                rgb = bytes.fromhex(table_style.body_font.color)
+                                if len(rgb) == 3:
+                                    run.font.color.rgb = RGBColor(*rgb)
                         except:
                             pass
 
