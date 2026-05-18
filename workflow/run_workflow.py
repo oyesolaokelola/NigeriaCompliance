@@ -3,7 +3,7 @@ import json
 import logging
 import runpy
 from pathlib import Path
-from typing import Optional, Set
+from typing import Optional, Set, List, Dict, Any
 
 from .ingestion import discover_files
 from .extraction import extract_record
@@ -50,22 +50,28 @@ def _relative_repo_path(path: Path, repo_dir_path: Path) -> str:
     return str(path.relative_to(repo_dir_path).as_posix())
 
 
-def process_repository(base_dir: Optional[str] = None, repo_dir: Optional[str] = None, output_dir: Optional[str] = None, template_name: Optional[str] = None):
+def process_repository(
+    base_dir: str = None,
+    repo_dir: str = None,
+    output_dir: str = None,
+    template_name: str = None,
+    file_paths: List[str] = None,
+) -> Dict[str, Any]:
     """
-    Process documents in a repository and return results as a dict.
-    This is a programmatic entrypoint intended for API/POC use.
-    
+    Process documents in the repository directory.
+
     Args:
-        base_dir: Base directory (defaults to project root)
+        base_dir: Project root directory (defaults to script location)
         repo_dir: Repository directory with documents (defaults to base_dir/repository)
         output_dir: Output directory for results (defaults to base_dir/output)
         template_name: Optional template name for styling output documents
+        file_paths: Optional list of specific file paths to process (if provided, only these files will be processed)
     """
     base_dir_path = Path(base_dir) if base_dir else Path(__file__).resolve().parent.parent
     repo_dir_path = Path(repo_dir) if repo_dir else base_dir_path / "repository"
     output_dir_path = Path(output_dir) if output_dir else base_dir_path / "output"
     output_dir_path.mkdir(exist_ok=True, parents=True)
-    
+
     # Initialize template manager and choose either dynamic template or default profile
     templates_dir = base_dir_path / "templates"
     template_manager = TemplateManager(templates_dir)
@@ -78,15 +84,29 @@ def process_repository(base_dir: Optional[str] = None, repo_dir: Optional[str] =
     processed_file_path = output_dir_path / PROCESSED_FILES_NAME
     processed_paths = _load_processed_files(processed_file_path)
 
-    files = discover_files(repo_dir_path)
-    if not files:
-        generator_path = base_dir_path / "generate_sample_documents.py"
-        if generator_path.exists():
-            try:
-                runpy.run_path(str(generator_path), run_name="__main__")
-                files = discover_files(repo_dir_path)
-            except Exception as exc:
-                print(f"Sample document generation failed: {exc}")
+    # If specific file paths are provided, process only those files
+    if file_paths:
+        files = []
+        for file_path in file_paths:
+            path = Path(file_path)
+            if path.exists():
+                # Determine department from parent directory
+                dept = path.parent.name
+                files.append({"department": dept.capitalize(), "path": path})
+                logger.info(f"Processing specific file: {file_path}")
+            else:
+                logger.warning(f"File not found: {file_path}")
+    else:
+        # Default behavior: discover all files in repository
+        files = discover_files(repo_dir_path)
+        if not files:
+            generator_path = base_dir_path / "generate_sample_documents.py"
+            if generator_path.exists():
+                try:
+                    runpy.run_path(str(generator_path), run_name="__main__")
+                    files = discover_files(repo_dir_path)
+                except Exception as exc:
+                    print(f"Sample document generation failed: {exc}")
 
     unprocessed_files = []
     for fi in files:
@@ -94,13 +114,15 @@ def process_repository(base_dir: Optional[str] = None, repo_dir: Optional[str] =
             rel_path = _relative_repo_path(fi["path"], repo_dir_path)
         except Exception:
             continue
-        if rel_path not in processed_paths:
+        # If file_paths is provided, process regardless of processed status
+        # Otherwise, only process unprocessed files
+        if file_paths or rel_path not in processed_paths:
             unprocessed_files.append(fi)
 
     if not unprocessed_files:
         raise RuntimeError(
-            "No new input files found since the last processing run. "
-            "Upload new documents under repository/<department>/ to process only fresh files."
+            "No input files found to process. "
+            "Upload new documents under repository/<department>/ or provide specific file paths."
         )
 
     records = []

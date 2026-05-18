@@ -71,6 +71,7 @@ PROCESS_STATUS = {
     "last_message": None,
     "active_template": None,
     "generation_mode": "apply",
+    "uploaded_files": [],
 }
 
 
@@ -95,13 +96,18 @@ def _start_background_process():
         )
 
     active_template = PROCESS_STATUS.get("active_template")
+    uploaded_files = PROCESS_STATUS.get("uploaded_files", [])
+    generation_mode = PROCESS_STATUS.get("generation_mode", "apply")
 
     def _target():
         try:
-            result = process_repository(template_name=active_template)
+            # Pass uploaded files to process only those, or None to process all
+            file_paths = uploaded_files if uploaded_files else None
+            result = process_repository(template_name=active_template, file_paths=file_paths)
             _update_status(
                 last_finished=datetime.utcnow().isoformat() + "Z",
                 last_message="Processing completed successfully",
+                uploaded_files=[],  # Clear uploaded files after processing
             )
             return result
         except Exception as exc:
@@ -110,6 +116,7 @@ def _start_background_process():
                 last_error=str(exc),
                 last_error_type=type(exc).__name__,
                 last_message="Processing failed",
+                uploaded_files=[],  # Clear uploaded files even on failure
             )
         finally:
             _update_status(running=False)
@@ -164,6 +171,11 @@ async def upload(file: UploadFile = File(...), department: str = Form("other")):
     content = await file.read()
     with open(dest_path, "wb") as f:
         f.write(content)
+    
+    # Store uploaded file path for processing
+    with PROCESS_LOCK:
+        PROCESS_STATUS["uploaded_files"].append(str(dest_path))
+    
     return {"stored_path": str(dest_path), "department": dept, "filename": filename}
 
 
