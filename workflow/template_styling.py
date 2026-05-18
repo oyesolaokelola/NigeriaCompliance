@@ -515,6 +515,14 @@ class TemplateExtractor:
         try:
             for style in doc.styles:
                 if style.type == 1:  # Paragraph style
+                    # Convert RGBColor to hex string
+                    color_hex = '000000'
+                    if style.font.color and style.font.color.rgb:
+                        try:
+                            color_hex = style.font.color.rgb.string.lstrip('#')
+                        except:
+                            color_hex = '000000'
+                    
                     styles[style.name] = {
                         'type': 'paragraph',
                         'font': {
@@ -522,7 +530,7 @@ class TemplateExtractor:
                             'size': style.font.size.pt if style.font.size else 11,
                             'bold': style.font.bold,
                             'italic': style.font.italic,
-                            'color': style.font.color.rgb if style.font.color else '000000'
+                            'color': color_hex
                         },
                         'paragraph': {
                             'alignment': str(style.paragraph_format.alignment) if style.paragraph_format.alignment else 'left',
@@ -532,6 +540,14 @@ class TemplateExtractor:
                         }
                     }
                 elif style.type == 2:  # Character style
+                    # Convert RGBColor to hex string
+                    color_hex = '000000'
+                    if style.font.color and style.font.color.rgb:
+                        try:
+                            color_hex = style.font.color.rgb.string.lstrip('#')
+                        except:
+                            color_hex = '000000'
+                    
                     styles[style.name] = {
                         'type': 'character',
                         'font': {
@@ -539,7 +555,7 @@ class TemplateExtractor:
                             'size': style.font.size.pt if style.font.size else 11,
                             'bold': style.font.bold,
                             'italic': style.font.italic,
-                            'color': style.font.color.rgb if style.font.color else '000000'
+                            'color': color_hex
                         }
                     }
         except Exception as e:
