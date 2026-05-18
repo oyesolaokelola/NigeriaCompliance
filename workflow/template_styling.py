@@ -7,6 +7,7 @@ and apply those styles to generated documents, ensuring consistent formatting ac
 """
 
 import logging
+import json
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field, asdict
