@@ -9,6 +9,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import List
 from urllib.parse import quote
 
 # Ensure project root is importable
@@ -604,9 +605,9 @@ async def process_with_claude(
         else:
             # Use active template if any
             active = PROCESS_STATUS.get("active_template")
+            template_profile = template_manager.get_template_or_default(active)
             if active:
-                tp = template_manager.get_template_profile(active)
-                template_analysis = {"structure": {}, "branding": {"template_name": tp.template_name}}
+                template_analysis = {"structure": {}, "branding": {"template_name": template_profile.template_name}}
             else:
                 template_analysis = {"structure": {}, "branding": {}}
 
@@ -634,10 +635,18 @@ async def process_with_claude(
 
         # Create summary charts and a simple HTML narrative using Claude's interpretation if present
         output_dir = OUTPUT_DIR
-        charts = create_summary_charts(aggregated, output_dir)
+        charts = create_summary_charts(aggregated, output_dir, template_profile=template_profile)
 
         narrative = extraction.get("narrative") if isinstance(extraction, dict) else ""
-        html_path = generate_html_report(aggregated, status, issues, charts, narrative, output_dir, template_profile=None)
+        html_path = generate_html_report(
+            aggregated,
+            status,
+            issues,
+            charts,
+            narrative,
+            output_dir,
+            template_profile=template_profile,
+        )
 
         # Save aggregated data
         with open(output_dir / "aggregated_data.json", "w", encoding="utf-8") as f:
