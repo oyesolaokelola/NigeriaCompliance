@@ -40,8 +40,13 @@ class ClaudeClientStub:
             logger.exception("File upload to Claude failed")
             raise
 
-    def create_message(self, messages: List[Dict[str, Any]], model: str = "claude-2") -> Dict[str, Any]:
+    def create_message(self, messages: List[Dict[str, Any]], model: Optional[str] = None) -> Dict[str, Any]:
         # Send a chat-like message to Claude and return parsed JSON/text response.
+        # Model selection order:
+        # 1. explicit `model` argument
+        # 2. environment variable `CLAUDE_MODEL`
+        # 3. default fallback `claude-2`
+        model = model or os.getenv("CLAUDE_MODEL", "claude-2")
         try:
             resp = self._client.chat.completions.create(model=model, messages=messages)
             return resp
