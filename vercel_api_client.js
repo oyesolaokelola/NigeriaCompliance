@@ -49,6 +49,33 @@ async function triggerProcess() {
   return response.json();
 }
 
+async function processWithClaude({ templateFile = null, departmentFiles = [], mode = 'structure_and_branding' } = {}) {
+  if (!API_BASE_URL) {
+    throw new Error('API_BASE_URL is not configured.');
+  }
+
+  const formData = new FormData();
+  if (templateFile) {
+    formData.append('template_file', templateFile);
+  }
+  for (const f of departmentFiles) {
+    formData.append('department_docs', f);
+  }
+  formData.append('mode', mode);
+
+  const response = await fetch(`${API_BASE_URL}/process_with_claude`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`process_with_claude failed: ${response.status} ${errorText}`);
+  }
+
+  return response.json();
+}
+
 async function getProcessStatus() {
   if (!API_BASE_URL) {
     throw new Error('API_BASE_URL is not configured.');

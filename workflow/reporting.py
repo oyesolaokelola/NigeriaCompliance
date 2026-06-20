@@ -11,17 +11,35 @@ from reportlab.lib.units import inch
 from reportlab.lib.colors import HexColor
 
 
-def create_summary_charts(aggregated: Dict[str, Any], output_dir: Path) -> Dict[str, Path]:
+def create_summary_charts(aggregated: Dict[str, Any], output_dir: Path, template_profile: Optional[Any] = None) -> Dict[str, Path]:
     charts: Dict[str, Path] = {}
 
     m = aggregated["metrics"]
 
     rev = m.get("revenue")
     payroll = m.get("total_payroll")
+    # Apply template styling to matplotlib if provided
+    if template_profile:
+        try:
+            import matplotlib
+            # Font
+            if template_profile.body_font and getattr(template_profile.body_font, "name", None):
+                matplotlib.rcParams["font.family"] = template_profile.body_font.name
+            # Colors
+            color_primary = None
+            if getattr(template_profile, "color_scheme", None):
+                color_primary = template_profile.color_scheme.get("primary")
+            bar_color = f"#{color_primary}" if color_primary else None
+        except Exception:
+            bar_color = None
+    else:
+        bar_color = None
+
     if rev and payroll:
         chart_path = output_dir / "Summary_Revenue_vs_Payroll.png"
         plt.figure(figsize=(4, 3))
-        plt.bar(["Revenue", "Payroll"], [rev, payroll])
+        colors = [bar_color or "#4C72B0", bar_color or "#55A868"]
+        plt.bar(["Revenue", "Payroll"], [rev, payroll], color=colors)
         plt.ylabel("Amount")
         plt.title("Revenue vs Payroll")
         plt.tight_layout()
@@ -33,7 +51,7 @@ def create_summary_charts(aggregated: Dict[str, Any], output_dir: Path) -> Dict[
     if vendor_spend:
         chart_path = output_dir / "Summary_Vendor_Spend.png"
         plt.figure(figsize=(4, 3))
-        plt.bar(["Vendor Spend"], [vendor_spend])
+        plt.bar(["Vendor Spend"], [vendor_spend], color=bar_color or "#DD8452")
         plt.ylabel("Amount")
         plt.title("Total Vendor Spend")
         plt.tight_layout()
