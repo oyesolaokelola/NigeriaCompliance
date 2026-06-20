@@ -39,3 +39,33 @@ Notes:
 - Install the `anthropic` package and `PyPDF2` with `pip install -r requirements.txt` before using the Claude integration.
 - For security, set the `CLAUDE_API_KEY` in your deployment environment (Railway, Vercel) rather than hardcoding it.
 
+Model selection (optional):
+---------------------------
+You can control which Claude model the pipeline uses via an environment variable named `CLAUDE_MODEL`.
+
+Behavior:
+- If `CLAUDE_MODEL` is set, the code will use that model string when calling Claude.
+- If `CLAUDE_MODEL` is not set, the pipeline falls back to `claude-2` (safe default).
+
+Recommended values:
+- `claude-2` — default/fallback; stable and generally capable for structured extraction and template analysis.
+- `claude-opus-4-1` — higher-capability model; recommended for complex documents, detailed visual/template interpretation, or when higher accuracy is required.
+- `claude-3-5-sonnet` — lower-cost option suitable for simpler documents and bulk processing when budgets are constrained.
+
+How to set in Railway / Vercel (example):
+1. In your Railway project, go to Settings → Variables and add `CLAUDE_API_KEY` and `CLAUDE_MODEL`.
+2. Example values:
+	- `CLAUDE_API_KEY`: "sk-..." (your Claude API key)
+	- `CLAUDE_MODEL`: `claude-opus-4-1`
+
+PowerShell example (local):
+```powershell
+$env:CLAUDE_API_KEY = "your_claude_api_key_here"
+$env:CLAUDE_MODEL = "claude-opus-4-1"  # optional
+```
+
+Notes and best practices:
+- Pin a specific `CLAUDE_MODEL` value in production to avoid unexpected behavior from model rollouts.
+- If you want to experiment, set `CLAUDE_MODEL` in a staging environment first and validate outputs.
+- Keep `CLAUDE_API_KEY` secret and rotate keys periodically.
+
