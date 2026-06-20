@@ -269,6 +269,22 @@ OUTPUT FILES:
 
 ---
 
+## V0 Claude Integration (Optional)
+
+This release adds an optional Claude-based processing flow that can be enabled by setting `CLAUDE_API_KEY`.
+
+Modes supported:
+- `structure_only` — use the template to guide how department data is extracted and structured.
+- `structure_and_branding` — use template structure and also extract letterhead/branding for output.
+- `branding_only` — extract only the template branding and apply to default output structure.
+
+Endpoint:
+- `POST /process_with_claude` — Accepts `template_file` (optional), `department_docs` (one or more files), and form field `mode` to control behavior. Returns aggregated JSON, compliance status, and path to generated report.
+
+Rationale:
+- Claude's Files API reduces OCR/formatting fragility and centralizes extraction + interpretation, improving consistency for compliance reporting.
+
+
 ## API Endpoints
 
 ### Template Management (NEW)

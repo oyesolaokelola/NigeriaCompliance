@@ -17,6 +17,10 @@ sys.path.insert(0, str(BASE_DIR))
 
 from workflow.run_workflow import process_repository
 from workflow.template_styling import TemplateManager
+from workflow.claude_pipeline import ClaudePipeline
+from workflow.aggregation import aggregate_records
+from workflow.compliance import run_compliance_checks
+from workflow.reporting import create_summary_charts, generate_html_report
 
 app = FastAPI(title="NigeriaCompliance POC API")
 
@@ -572,6 +576,82 @@ def process_endpoint(generation_mode: str = Form("apply")):
         "artifact_list_url": "/artifacts",
         "artifact_template": "/artifact/{filename}",
     }
+
+
+@app.post("/process_with_claude")
+async def process_with_claude(
+    template_file: UploadFile = File(None),
+    department_docs: List[UploadFile] = File(...),
+    mode: str = Form("structure_and_branding"),
+):
+    """Process documents end-to-end using the Claude pipeline.
+
+    - `template_file` is optional; if omitted, the active template will be used.
+    - `department_docs` is a list of uploaded department files.
+    - `mode` controls template usage: structure_only, structure_and_branding, branding_only
+    """
+    try:
+        pipeline = ClaudePipeline()
+
+        # Read template if provided
+        template_profile = None
+        template_bytes = None
+        template_name = None
+        if template_file:
+            template_bytes = await template_file.read()
+            template_name = template_file.filename
+            template_analysis = pipeline.analyze_template(template_bytes, template_name, mode=mode)
+        else:
+            # Use active template if any
+            active = PROCESS_STATUS.get("active_template")
+            if active:
+                tp = template_manager.get_template_profile(active)
+                template_analysis = {"structure": {}, "branding": {"template_name": tp.template_name}}
+            else:
+                template_analysis = {"structure": {}, "branding": {}}
+
+        # Read department docs
+        dept_bytes = []
+        filenames = []
+        for f in department_docs:
+            b = await f.read()
+            dept_bytes.append(b)
+            filenames.append(f.filename)
+
+        extraction = pipeline.extract_and_interpret(dept_bytes, filenames, template_structure=template_analysis.get("structure"))
+
+        # Build a single record or list to aggregate
+        records = []
+        if isinstance(extraction, dict) and extraction.get("department"):
+            records.append(extraction)
+        elif isinstance(extraction, list):
+            records.extend(extraction)
+        else:
+            records.append({"department": "Unknown", "metrics": extraction.get("metrics") if isinstance(extraction, dict) else {}})
+
+        aggregated = aggregate_records(records)
+        status, issues = run_compliance_checks(aggregated)
+
+        # Create summary charts and a simple HTML narrative using Claude's interpretation if present
+        output_dir = OUTPUT_DIR
+        charts = create_summary_charts(aggregated, output_dir)
+
+        narrative = extraction.get("narrative") if isinstance(extraction, dict) else ""
+        html_path = generate_html_report(aggregated, status, issues, charts, narrative, output_dir, template_profile=None)
+
+        # Save aggregated data
+        with open(output_dir / "aggregated_data.json", "w", encoding="utf-8") as f:
+            json.dump(aggregated, f, indent=2)
+
+        return {
+            "success": True,
+            "aggregated": aggregated,
+            "compliance_status": status,
+            "issues": issues,
+            "report_path": str(html_path),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Claude processing failed: {e}")
 
 
 @app.get("/process/status")
