@@ -35,6 +35,7 @@ class ClaudeClientStub:
             ) from e
         # Use the detected key (covers CLAUDE_API_KEY or ANTHROPIC_API_KEY)
         self._client = anthropic.Client(api_key=key)
+        self._api_key = key
 
         # Log Anthropic package version and whether the Files API is available
         try:
@@ -43,13 +44,23 @@ class ClaudeClientStub:
         except Exception:
             logger.debug("Could not read anthropic.__version__")
 
-        self._has_files_api = hasattr(self._client, "files")
-        logger.info(f"anthropic client has files API: {self._has_files_api}")
+        self._has_beta_files = hasattr(self._client, "beta") and hasattr(self._client.beta, "files")
+        self._has_files_api = self._has_beta_files or hasattr(self._client, "files")
+        logger.info(f"anthropic client has files API: {self._has_files_api}, beta.files: {self._has_beta_files}")
 
     def upload_file(self, file_bytes: bytes, filename: str, content_type: str = "application/pdf") -> str:
         # Upload a file to the Anthropic files API (beta). Returns a file_id string.
         # Implementation may change depending on the official SDK surface.
-        if self._has_files_api:
+        if self._has_beta_files:
+            try:
+                resp = self._client.beta.files.upload(file=(filename, file_bytes, content_type))
+                if isinstance(resp, dict):
+                    return resp.get("id") or resp.get("file_id") or str(resp)
+                return getattr(resp, "id", getattr(resp, "file_id", str(resp)))
+            except Exception as e:
+                logger.exception("File upload to Claude failed using beta.files.upload()")
+                raise
+        elif hasattr(self._client, "files"):
             try:
                 resp = self._client.files.create(file=(filename, file_bytes, content_type))
                 return getattr(resp, "id", getattr(resp, "file_id", str(resp)))
@@ -58,14 +69,16 @@ class ClaudeClientStub:
                 raise
         else:
             try:
-                # Fall back to raw HTTP upload if the SDK does not expose files.create().
+                # Fall back to raw HTTP upload if the SDK does not expose a files API.
                 base_url = getattr(self._client, "base_url", "https://api.anthropic.com")
                 if not base_url:
                     base_url = getattr(self._client, "_base_url", "https://api.anthropic.com")
+
+                headers = {}
                 if callable(getattr(self._client, "auth_headers", None)):
-                    headers = self._client.auth_headers()
-                else:
-                    headers = getattr(self._client, "auth_headers", {})
+                    headers = self._client.auth_headers() or {}
+                elif self._api_key:
+                    headers = {"x-api-key": self._api_key}
                 headers = headers.copy() if isinstance(headers, dict) else {}
                 headers["Accept"] = "application/json"
 
@@ -87,12 +100,12 @@ class ClaudeClientStub:
                 available = dir(self._client)
                 logger.error(
                     "Anthropic SDK appears to be missing the Files API. "
-                    "Install anthropic>=0.40.0 or use a runtime that provides files.create(). "
+                    "Use beta.files.upload() or ensure the installed SDK exposes a valid file upload method. "
                     f"Client attrs: {available}"
                 )
                 logger.exception("Raw Anthropic HTTP file upload fallback failed")
                 raise RuntimeError(
-                    "Anthropic SDK in runtime does not expose files.create() and raw HTTP upload fallback failed. "
+                    "Anthropic SDK in runtime does not expose files.create() or beta.files.upload(), and raw HTTP upload fallback failed. "
                     "Please verify the Anthropic SDK version and API credentials."
                 ) from e
 
