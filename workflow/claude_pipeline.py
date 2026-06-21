@@ -7,9 +7,11 @@ logger = logging.getLogger(__name__)
 
 
 def _require_api_key():
-    key = os.getenv("CLAUDE_API_KEY")
+    key = os.getenv("CLAUDE_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
     if not key:
-        raise EnvironmentError("CLAUDE_API_KEY not set. Please set it as an environment variable.")
+        raise EnvironmentError(
+            "CLAUDE_API_KEY not set. Please set CLAUDE_API_KEY or ANTHROPIC_API_KEY as an environment variable."
+        )
     return key
 
 

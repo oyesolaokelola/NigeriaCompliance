@@ -26,6 +26,7 @@ This project supports using Anthropic's Claude Files API to perform unified docu
 
 Setup:
 - Set the `CLAUDE_API_KEY` environment variable in your local shell or in Railway/Vercel environment settings.
+- If you already have `ANTHROPIC_API_KEY` configured, this backend will also accept that as a fallback.
 
 Examples (PowerShell):
 ```powershell
