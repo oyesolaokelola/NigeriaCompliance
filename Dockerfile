@@ -11,7 +11,7 @@ WORKDIR /app
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
-RUN pip show anthropic || true
+RUN python -c "import anthropic; print('anthropic version:', anthropic.__version__)"
 
 COPY . .
 
