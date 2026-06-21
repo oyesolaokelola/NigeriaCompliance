@@ -23,24 +23,48 @@ class ClaudeClientStub:
     """
 
     def __init__(self):
-        _require_api_key()
+        # Ensure an API key exists (CLAUDE_API_KEY or ANTHROPIC_API_KEY) and use it
+        key = _require_api_key()
         try:
             import anthropic
         except Exception as e:
             raise ImportError(
                 "Please install the 'anthropic' package and set CLAUDE_API_KEY."
             ) from e
-        self._client = anthropic.Client(api_key=os.getenv("CLAUDE_API_KEY"))
+        # Use the detected key (covers CLAUDE_API_KEY or ANTHROPIC_API_KEY)
+        self._client = anthropic.Client(api_key=key)
+
+        # Log Anthropic package version and whether the Files API is available
+        try:
+            ver = getattr(anthropic, "__version__", None)
+            logger.info(f"anthropic package version: {ver}")
+        except Exception:
+            logger.debug("Could not read anthropic.__version__")
+
+        self._has_files_api = hasattr(self._client, "files")
+        logger.info(f"anthropic client has files API: {self._has_files_api}")
 
     def upload_file(self, file_bytes: bytes, filename: str, content_type: str = "application/pdf") -> str:
         # Upload a file to the Anthropic files API (beta). Returns a file_id string.
         # Implementation may change depending on the official SDK surface.
-        try:
-            resp = self._client.files.create(file=(filename, file_bytes, content_type))
-            return getattr(resp, "id", getattr(resp, "file_id", str(resp)))
-        except Exception as e:
-            logger.exception("File upload to Claude failed")
-            raise
+        if self._has_files_api:
+            try:
+                resp = self._client.files.create(file=(filename, file_bytes, content_type))
+                return getattr(resp, "id", getattr(resp, "file_id", str(resp)))
+            except Exception as e:
+                logger.exception("File upload to Claude failed using files.create()")
+                raise
+        else:
+            available = dir(self._client)
+            logger.error(
+                "Anthropic SDK appears to be missing the Files API. "
+                "Install anthropic>=0.40.0 or use a runtime that provides files.create(). "
+                f"Client attrs: {available}"
+            )
+            raise RuntimeError(
+                "Anthropic SDK in runtime does not expose files.create(). "
+                "Please upgrade the 'anthropic' package to a version that includes the Files API (e.g. >=0.40.0)."
+            )
 
     def create_message(self, messages: List[Dict[str, Any]], model: Optional[str] = None) -> Dict[str, Any]:
         # Send a chat-like message to Claude and return parsed JSON/text response.
