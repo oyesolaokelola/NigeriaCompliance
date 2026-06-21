@@ -463,150 +463,140 @@ export function TemplateManager({ onTemplateActivated }) {
 
 ### Step 2: Update API Client Helper
 
-Update `vercelApiClient.js` to include template endpoints and generation mode:
+Update `vercelApiClient.js` to use the current Claude processing endpoint and the new template modes:
 
 ```javascript
-// Add these functions to vercelApiClient.js
-
-export async function uploadTemplate(file, templateName) {
+export async function processWithClaude({ templateFile = null, departmentFiles = [], mode = 'structure_and_branding' } = {}) {
   const formData = new FormData();
-  formData.append('file', file);
-  formData.append('template_name', templateName);
-  
-  const response = await fetch(`${getApiBaseUrl()}/templates/upload`, {
+
+  if (templateFile) {
+    formData.append('template_file', templateFile);
+  }
+  departmentFiles.forEach((file) => {
+    formData.append('department_docs', file);
+  });
+  formData.append('mode', mode);
+
+  const response = await fetch(`${getApiBaseUrl()}/process_with_claude`, {
     method: 'POST',
     body: formData,
   });
-  
-  if (!response.ok) {
-    throw new Error(`Upload failed: ${response.statusText}`);
-  }
-  
-  return response.json();
-}
 
-export async function getTemplateList() {
-  const response = await fetch(`${getApiBaseUrl()}/templates`);
-  
   if (!response.ok) {
-    throw new Error(`Failed to fetch templates: ${response.statusText}`);
+    const errorText = await response.text();
+    throw new Error(`process_with_claude failed: ${response.status} ${errorText}`);
   }
-  
-  return response.json();
-}
 
-export async function activateTemplate(templateName) {
-  const response = await fetch(
-    `${getApiBaseUrl()}/templates/${templateName}/activate`,
-    { method: 'POST' }
-  );
-  
-  if (!response.ok) {
-    throw new Error(`Failed to activate template: ${response.statusText}`);
-  }
-  
-  return response.json();
-}
-
-export async function getTemplateInfo(templateName) {
-  const response = await fetch(
-    `${getApiBaseUrl()}/templates/info/${templateName}`
-  );
-  
-  if (!response.ok) {
-    throw new Error(`Failed to fetch template info: ${response.statusText}`);
-  }
-  
-  return response.json();
-}
-
-export async function startProcessing(generationMode = 'apply') {
-  const formData = new FormData();
-  formData.append('generation_mode', generationMode);
-  
-  const response = await fetch(`${getApiBaseUrl()}/process`, {
-    method: 'POST',
-    body: formData,
-  });
-  
-  if (!response.ok) {
-    throw new Error(`Failed to start processing: ${response.statusText}`);
-  }
-  
   return response.json();
 }
 ```
 
+- `mode` values supported by the backend:
+  - `structure_only`
+  - `structure_and_branding`
+  - `branding_only`
+- `templateFile` is optional; if omitted, the backend uses the active template.
+- `departmentFiles` must be sent as repeated `department_docs` fields.
+
 ### Step 3: Integrate into Main Application
 
-Update your main application component to include the template manager and generation mode selection:
+Use `processWithClaude()` in the app when a template mode is active, but keep the existing pipeline polling path as a fallback.
 
 ```javascript
-import { TemplateManager } from './components/TemplateManager';
-import { DocumentUploader } from './components/DocumentUploader';
-import { ProcessingStatus } from './components/ProcessingStatus';
+import { processWithClaude, triggerProcessAndWait } from './vercelApiClient';
 
 export function App() {
   const [templateActivated, setTemplateActivated] = useState(false);
   const [processing, setProcessing] = useState(false);
-  const [generationMode, setGenerationMode] = useState('apply'); // 'apply' or 'modify'
+  const [selectedMode, setSelectedMode] = useState('structure_and_branding');
+  const [departmentFiles, setDepartmentFiles] = useState([]);
+  const [templateFile, setTemplateFile] = useState(null);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+
+  const handleProcess = async () => {
+    setProcessing(true);
+    setError(null);
+
+    try {
+      if (templateActivated) {
+        try {
+          const response = await processWithClaude({
+            templateFile,
+            departmentFiles,
+            mode: selectedMode,
+          });
+          setResult(response);
+          return;
+        } catch (err) {
+          console.warn('process_with_claude failed, falling back to /process', err);
+          setError('Template processing failed; falling back to pipeline mode.');
+        }
+      }
+
+      const status = await triggerProcessAndWait();
+      setResult(status);
+    } catch (err) {
+      setError(err.message || 'Processing failed.');
+    } finally {
+      setProcessing(false);
+    }
+  };
 
   return (
     <div className="app-container">
       <h1>🏛️ NigeriaCompliance - Template-Based Report Generator</h1>
-      
-      {/* Step 1: Template Management */}
+
       <section className="template-section">
-        <TemplateManager 
-          onTemplateActivated={() => setTemplateActivated(true)}
-        />
+        <TemplateManager onTemplateActivated={() => setTemplateActivated(true)} />
       </section>
 
-      {/* Step 2: Generation Mode Selection (only show if template is active) */}
       {templateActivated && (
         <section className="generation-mode-section">
-          <h3>Document Generation Mode</h3>
+          <h3>Template Processing Mode</h3>
           <div className="mode-selector">
-            <label className="mode-option">
-              <input
-                type="radio"
-                value="apply"
-                checked={generationMode === 'apply'}
-                onChange={(e) => setGenerationMode(e.target.value)}
-              />
-              <div className="mode-details">
-                <strong>Apply Styles to New Document</strong>
-                <p>Extract styles from template and apply to new document</p>
-              </div>
-            </label>
-            <label className="mode-option">
-              <input
-                type="radio"
-                value="modify"
-                checked={generationMode === 'modify'}
-                onChange={(e) => setGenerationMode(e.target.value)}
-              />
-              <div className="mode-details">
-                <strong>Modify Template In-Place (Recommended)</strong>
-                <p>Modify the template document directly for most accurate mirroring</p>
-              </div>
-            </label>
+            {['structure_only', 'structure_and_branding', 'branding_only'].map((mode) => (
+              <label key={mode} className="mode-option">
+                <input
+                  type="radio"
+                  value={mode}
+                  checked={selectedMode === mode}
+                  onChange={(e) => setSelectedMode(e.target.value)}
+                />
+                <div className="mode-details">
+                  <strong>{mode}</strong>
+                  <p>{
+                    mode === 'structure_only'
+                      ? 'Use template structure without branding.'
+                      : mode === 'structure_and_branding'
+                      ? 'Apply both structure and branding from the template.'
+                      : 'Apply only branding elements from the template.'
+                  }</p>
+                </div>
+              </label>
+            ))}
           </div>
         </section>
       )}
 
-      {/* Step 3: Document Upload (only show if template is active) */}
-      {templateActivated && (
-        <section className="upload-section">
-          <DocumentUploader 
-            onProcessingStart={() => setProcessing(true)}
-            onProcessingComplete={() => setProcessing(false)}
-            generationMode={generationMode}
-          />
+      <section className="upload-section">
+        <DocumentUploader
+          departmentFiles={departmentFiles}
+          onDepartmentFilesChange={setDepartmentFiles}
+          onTemplateFileChange={setTemplateFile}
+        />
+        <button onClick={handleProcess} disabled={processing || departmentFiles.length === 0}>
+          {processing ? 'Processing...' : 'Start Pipeline'}
+        </button>
+        {error && <p className="error">{error}</p>}
+      </section>
+
+      {result && (
+        <section className="result-section">
+          <pre>{JSON.stringify(result, null, 2)}</pre>
         </section>
       )}
 
-      {/* Step 4: Processing Status */}
       {processing && (
         <section className="status-section">
           <ProcessingStatus />
@@ -616,6 +606,12 @@ export function App() {
   );
 }
 ```
+
+Key behavior:
+- If a template is active, the button first uses `/process_with_claude` with the selected mode.
+- If `/process_with_claude` fails, it falls back to the existing `/process` pipeline.
+- The existing `/process` path keeps polling with `triggerProcessAndWait()` so the UX still shows pipeline progress.
+- The main button label remains `Start Pipeline` to preserve the pipeline-oriented workflow.
 
 ### Step 4: CSS Styling
 
@@ -837,9 +833,10 @@ Add styling to `styles/templateManager.css`:
 - Multiple templates can be registered but only one can be active
 - Template profiles are cached locally for performance
 - Templates can be reused across multiple processing runs
-- Two generation modes available:
-  - **Apply**: Extract styles and apply to new document
-  - **Modify**: Modify template in-place for most accurate mirroring (recommended)
+- Backend `process_with_claude` supports three template modes:
+  - `structure_only`
+  - `structure_and_branding`
+  - `branding_only`
 - Template insights provide metrics on template structure (paragraphs, tables, images, custom styles)
 
 ---
@@ -869,8 +866,8 @@ const errorCases = {
 - [ ] Template activation updates the active template
 - [ ] Template info displays enhanced styling details (fonts, paragraph, table, list, image styles)
 - [ ] Template insights display correctly (paragraphs, tables, images, custom styles)
-- [ ] Generation mode selection works (apply/modify)
-- [ ] Generation mode is passed to processing endpoint
+- [ ] Template mode selection works (`structure_only`, `structure_and_branding`, `branding_only`)
+- [ ] Selected mode is passed to `/process_with_claude`
 - [ ] Error handling for invalid files
 - [ ] Error handling for network failures
 - [ ] Processing starts and completes with template active

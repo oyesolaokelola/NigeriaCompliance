@@ -3,6 +3,8 @@ import json
 import logging
 from typing import List, Dict, Any, Optional
 
+import requests
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,16 +57,44 @@ class ClaudeClientStub:
                 logger.exception("File upload to Claude failed using files.create()")
                 raise
         else:
-            available = dir(self._client)
-            logger.error(
-                "Anthropic SDK appears to be missing the Files API. "
-                "Install anthropic>=0.40.0 or use a runtime that provides files.create(). "
-                f"Client attrs: {available}"
-            )
-            raise RuntimeError(
-                "Anthropic SDK in runtime does not expose files.create(). "
-                "Please upgrade the 'anthropic' package to a version that includes the Files API (e.g. >=0.40.0)."
-            )
+            try:
+                # Fall back to raw HTTP upload if the SDK does not expose files.create().
+                base_url = getattr(self._client, "base_url", "https://api.anthropic.com")
+                if not base_url:
+                    base_url = getattr(self._client, "_base_url", "https://api.anthropic.com")
+                if callable(getattr(self._client, "auth_headers", None)):
+                    headers = self._client.auth_headers()
+                else:
+                    headers = getattr(self._client, "auth_headers", {})
+                headers = headers.copy() if isinstance(headers, dict) else {}
+                headers["Accept"] = "application/json"
+
+                upload_url = base_url.rstrip("/") + "/v1/files"
+                response = requests.post(
+                    upload_url,
+                    headers=headers,
+                    files={"file": (filename, file_bytes, content_type)},
+                    timeout=120,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                file_id = payload.get("id") or payload.get("file_id")
+                if not file_id:
+                    raise RuntimeError(f"Unexpected Anthropic file upload response: {payload}")
+                logger.info("Uploaded file via raw Anthropic HTTP fallback")
+                return file_id
+            except Exception as e:
+                available = dir(self._client)
+                logger.error(
+                    "Anthropic SDK appears to be missing the Files API. "
+                    "Install anthropic>=0.40.0 or use a runtime that provides files.create(). "
+                    f"Client attrs: {available}"
+                )
+                logger.exception("Raw Anthropic HTTP file upload fallback failed")
+                raise RuntimeError(
+                    "Anthropic SDK in runtime does not expose files.create() and raw HTTP upload fallback failed. "
+                    "Please verify the Anthropic SDK version and API credentials."
+                ) from e
 
     def create_message(self, messages: List[Dict[str, Any]], model: Optional[str] = None) -> Dict[str, Any]:
         # Send a chat-like message to Claude and return parsed JSON/text response.
