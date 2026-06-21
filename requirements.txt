@@ -13,5 +13,5 @@ fastapi
 uvicorn[standard]
 python-multipart
 requests
-anthropic
+anthropic>=0.40.0
 PyPDF2
