@@ -522,6 +522,40 @@ def debug_env():
     }
 
 
+@app.get("/debug/anthropic")
+def debug_anthropic():
+    """Return installed Anthropic package version and whether the client exposes the Files API.
+
+    Does not return secrets. Useful for verifying runtime matches `requirements.txt`.
+    """
+    try:
+        import anthropic
+    except Exception as e:
+        return {"installed": False, "error": str(e)}
+
+    ver = getattr(anthropic, "__version__", None)
+    client_has_files = None
+    detected_key = None
+
+    try:
+        if os.getenv("CLAUDE_API_KEY"):
+            detected_key = "CLAUDE_API_KEY"
+        elif os.getenv("ANTHROPIC_API_KEY"):
+            detected_key = "ANTHROPIC_API_KEY"
+
+        # Try to construct a client if a key is present; do not log the key value
+        if detected_key:
+            try:
+                client = anthropic.Client(api_key="" if not os.getenv(detected_key) else os.getenv(detected_key))
+                client_has_files = hasattr(client, "files")
+            except Exception as e:
+                client_has_files = False
+    except Exception:
+        client_has_files = False
+
+    return {"installed": True, "version": ver, "client_has_files": client_has_files, "detected_key": detected_key}
+
+
 @app.get("/debug/output")
 def debug_output():
     """Show what files are in the output directory."""
