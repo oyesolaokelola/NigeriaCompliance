@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+import logging
 import os
 import sys
 import uuid
@@ -24,6 +25,37 @@ from workflow.compliance import run_compliance_checks
 from workflow.reporting import create_summary_charts, generate_html_report
 
 app = FastAPI(title="NigeriaCompliance POC API")
+
+logger = logging.getLogger(__name__)
+
+
+@app.on_event("startup")
+async def log_anthropic_startup():
+    """Log the installed Anthropic package version and whether the client exposes the Files API.
+
+    This helps identify mismatches between `requirements.txt` and the runtime environment
+    when viewing Railway build/runtime logs.
+    """
+    try:
+        import anthropic
+    except Exception as e:
+        logger.info(f"Anthropic import failed at startup: {e}")
+        return
+
+    ver = getattr(anthropic, "__version__", None)
+    has_files = False
+    try:
+        key = os.getenv("CLAUDE_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
+        if key:
+            try:
+                client = anthropic.Client(api_key=key)
+                has_files = hasattr(client, "files")
+            except Exception as e:
+                logger.info(f"Anthropic client construction failed at startup: {e}")
+    except Exception:
+        pass
+
+    logger.info(f"Anthropic at startup: version={ver}, client_has_files={has_files}")
 
 origins_env = os.getenv("FRONTEND_ORIGINS", "*")
 if origins_env == "*":
