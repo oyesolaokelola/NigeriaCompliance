@@ -73,10 +73,18 @@ class ClaudeClientStub:
                 base_url = getattr(self._client, "base_url", "https://api.anthropic.com")
                 if not base_url:
                     base_url = getattr(self._client, "_base_url", "https://api.anthropic.com")
+                # Some client implementations expose URL objects; ensure string
+                try:
+                    base_url = str(base_url)
+                except Exception:
+                    base_url = "https://api.anthropic.com"
 
                 headers = {}
                 if callable(getattr(self._client, "auth_headers", None)):
-                    headers = self._client.auth_headers() or {}
+                    try:
+                        headers = self._client.auth_headers() or {}
+                    except Exception:
+                        headers = {}
                 elif self._api_key:
                     headers = {"x-api-key": self._api_key}
                 headers = headers.copy() if isinstance(headers, dict) else {}
