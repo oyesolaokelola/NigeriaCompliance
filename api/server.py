@@ -658,6 +658,11 @@ async def process_with_claude(
     - `mode` controls template usage: structure_only, structure_and_branding, branding_only
     """
     try:
+        import anthropic
+        print("ANTHROPIC VERSION AT RUNTIME:", getattr(anthropic, "__version__", None))
+        print("PYTHON:", sys.executable)
+        print("HAS beta.files.upload:", hasattr(anthropic.Anthropic().beta, "files"))
+
         pipeline = ClaudePipeline()
 
         # Read template if provided
