@@ -182,16 +182,21 @@ class ClaudeClientStub:
 
     def create_message(self, messages: List[Dict[str, Any]], model: Optional[str] = None) -> Dict[str, Any]:
         # Send a chat-like message to Claude and return parsed JSON/text response.
-        model = model or os.getenv("CLAUDE_MODEL", "claude-2")
+        model = model or os.getenv("CLAUDE_MODEL", "claude-opus-4-1")
         last_error = None
 
         if hasattr(self._client, "messages"):
             try:
-                resp = self._client.messages.create(model=model, messages=messages)
+                resp = self._client.messages.create(
+                    model=model,
+                    messages=messages,
+                    max_tokens=4096
+                )
                 return resp
             except Exception as e:
                 last_error = e
-                logger.warning("Anthropic client.messages.create() failed, falling back to alternative message APIs.")
+                logger.warning(f"Anthropic client.messages.create() failed: {e}")
+                logger.warning("Falling back to alternative message APIs.")
 
         if hasattr(self._client, "chat") and hasattr(self._client.chat, "completions"):
             try:
