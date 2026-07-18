@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import base64
 from typing import List, Dict, Any, Optional
 
 import requests
@@ -33,8 +34,16 @@ class ClaudeClientStub:
             raise ImportError(
                 "Please install the 'anthropic' package and set CLAUDE_API_KEY."
             ) from e
-        # Use the detected key (covers CLAUDE_API_KEY or ANTHROPIC_API_KEY)
-        self._client = anthropic.Client(api_key=key)
+
+        # Prefer the new Anthropic class if available, otherwise fall back to classic Client.
+        AnthropicClass = getattr(anthropic, "Anthropic", None) or getattr(anthropic, "Client", None)
+        if AnthropicClass is None:
+            raise ImportError(
+                "Installed Anthropic package does not expose Anthropic or Client. "
+                "Please install a compatible version >=0.50.0."
+            )
+
+        self._client = AnthropicClass(api_key=key)
         self._api_key = key
 
         # Log Anthropic package version and whether the Files API is available
@@ -117,20 +126,92 @@ class ClaudeClientStub:
                     "Please verify the Anthropic SDK version and API credentials."
                 ) from e
 
+    def _encode_file_as_base64(self, file_bytes: bytes) -> str:
+        return base64.b64encode(file_bytes).decode("utf-8")
+
+    def _build_inline_document_source(self, file_bytes: bytes, filename: str, content_type: str) -> Dict[str, Any]:
+        encoded = self._encode_file_as_base64(file_bytes)
+        source_type = "image" if content_type.startswith("image/") or content_type == "application/pdf" else "document"
+        return {
+            "type": source_type,
+            "source": {
+                "type": "base64",
+                "media_type": content_type,
+                "data": encoded,
+                "filename": filename,
+            },
+        }
+
+    def build_document_source(self, file_bytes: bytes, filename: str, content_type: str = "application/pdf") -> Dict[str, Any]:
+        if self._has_files_api:
+            try:
+                file_id = self.upload_file(file_bytes, filename, content_type)
+                return {"type": "document", "source": {"type": "file", "file_id": file_id}}
+            except Exception:
+                logger.warning("File upload failed in Anthropic client; falling back to inline base64 document source.")
+        return self._build_inline_document_source(file_bytes, filename, content_type)
+
+    def _extract_text_from_response(self, response: Any) -> str:
+        if response is None:
+            return ""
+        if isinstance(response, str):
+            return response
+        if isinstance(response, dict):
+            if "choices" in response and response["choices"]:
+                choice = response["choices"][0]
+                if isinstance(choice, dict) and "message" in choice:
+                    return self._extract_text_from_response(choice["message"].get("content"))
+            if "content" in response:
+                return self._extract_text_from_response(response["content"])
+            return json.dumps(response)
+        if hasattr(response, "choices"):
+            choices = getattr(response, "choices")
+            if choices:
+                first = choices[0]
+                if hasattr(first, "message"):
+                    return self._extract_text_from_response(getattr(first.message, "content", None))
+        if hasattr(response, "message"):
+            return self._extract_text_from_response(getattr(response.message, "content", None))
+        if hasattr(response, "content"):
+            return self._extract_text_from_response(getattr(response, "content"))
+        if isinstance(response, list) and response:
+            first = response[0]
+            if isinstance(first, dict):
+                return first.get("text") or first.get("content") or json.dumps(first)
+        return str(response)
+
     def create_message(self, messages: List[Dict[str, Any]], model: Optional[str] = None) -> Dict[str, Any]:
         # Send a chat-like message to Claude and return parsed JSON/text response.
-        # Model selection order:
-        # 1. explicit `model` argument
-        # 2. environment variable `CLAUDE_MODEL`
-        # 3. default fallback `claude-2`
         model = model or os.getenv("CLAUDE_MODEL", "claude-2")
-        try:
-            resp = self._client.chat.completions.create(model=model, messages=messages)
-            return resp
-        except Exception:
-            # Try fallback to older API surface
-            resp = self._client.completions.create(model=model, prompt=messages)
-            return resp
+        last_error = None
+
+        if hasattr(self._client, "messages"):
+            try:
+                resp = self._client.messages.create(model=model, messages=messages)
+                return resp
+            except Exception as e:
+                last_error = e
+                logger.warning("Anthropic client.messages.create() failed, falling back to alternative message APIs.")
+
+        if hasattr(self._client, "chat") and hasattr(self._client.chat, "completions"):
+            try:
+                resp = self._client.chat.completions.create(model=model, messages=messages)
+                return resp
+            except Exception as e:
+                last_error = e
+                logger.warning("Anthropic client.chat.completions.create() failed, falling back to alternative message APIs.")
+
+        if hasattr(self._client, "completions"):
+            try:
+                resp = self._client.completions.create(model=model, prompt=messages)
+                return resp
+            except Exception as e:
+                last_error = e
+                logger.warning("Anthropic client.completions.create() failed.")
+
+        raise RuntimeError(
+            "Unable to send Claude message: no compatible Anthropic chat API was found or all attempts failed."
+        ) from last_error
 
 
 class ClaudePipeline:
@@ -142,12 +223,12 @@ class ClaudePipeline:
 
         Returns a JSON-like dict with keys `structure` and `branding` depending on mode.
         """
-        file_id = self.client.upload_file(template_file_bytes, filename)
+        template_source = self.client.build_document_source(template_file_bytes, filename)
 
         prompt = {
             "role": "user",
             "content": [
-                {"type": "document", "source": {"type": "file", "file_id": file_id}},
+                template_source,
                 {
                     "type": "text",
                     "text": (
@@ -175,13 +256,10 @@ class ClaudePipeline:
             return {"raw": text}
 
     def extract_and_interpret(self, dept_file_bytes_list: List[bytes], filenames: List[str], template_structure: Dict[str, Any] = None) -> Dict[str, Any]:
-        file_ids = []
+        content = []
         for b, name in zip(dept_file_bytes_list, filenames):
-            file_ids.append(self.client.upload_file(b, name))
+            content.append(self.client.build_document_source(b, name))
 
-        content = [
-            {"type": "document", "source": {"type": "file", "file_id": fid}} for fid in file_ids
-        ]
         content.append({"type": "text", "text": f"Template structure: {json.dumps(template_structure or {})}\n\nExtract metrics, period, department, and return JSON."})
 
         prompt = {"role": "user", "content": content}
@@ -199,12 +277,12 @@ class ClaudePipeline:
 
     def validate_pdf_against_template(self, generated_pdf_bytes: bytes, generated_name: str, template_file_bytes: bytes, template_name: str) -> Dict[str, Any]:
         # Upload both and ask Claude to compare structure/sections/headings and charts
-        gen_id = self.client.upload_file(generated_pdf_bytes, generated_name, content_type="application/pdf")
-        tpl_id = self.client.upload_file(template_file_bytes, template_name, content_type="application/pdf")
+        gen_source = self.client.build_document_source(generated_pdf_bytes, generated_name, content_type="application/pdf")
+        tpl_source = self.client.build_document_source(template_file_bytes, template_name, content_type="application/pdf")
 
         prompt = {"role": "user", "content": [
-            {"type": "document", "source": {"type": "file", "file_id": tpl_id}},
-            {"type": "document", "source": {"type": "file", "file_id": gen_id}},
+            tpl_source,
+            gen_source,
             {"type": "text", "text": "Compare the generated report against the template: list any structural or visual mismatches as JSON."}
         ]}
 

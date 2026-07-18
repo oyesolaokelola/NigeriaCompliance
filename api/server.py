@@ -47,11 +47,13 @@ async def log_anthropic_startup():
     try:
         key = os.getenv("CLAUDE_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
         if key:
-            try:
-                client = anthropic.Client(api_key=key)
-                has_files = hasattr(client, "files")
-            except Exception as e:
-                logger.info(f"Anthropic client construction failed at startup: {e}")
+            client_cls = getattr(anthropic, "Anthropic", None) or getattr(anthropic, "Client", None)
+            if client_cls is not None:
+                try:
+                    client = client_cls(api_key=key)
+                    has_files = hasattr(client, "files") or (hasattr(client, "beta") and hasattr(client.beta, "files"))
+                except Exception as e:
+                    logger.info(f"Anthropic client construction failed at startup: {e}")
     except Exception:
         pass
 
@@ -545,11 +547,16 @@ def debug_anthropic():
 
         # Try to construct a client if a key is present; do not log the key value
         if detected_key:
-            try:
-                client = anthropic.Client(api_key="" if not os.getenv(detected_key) else os.getenv(detected_key))
-                client_has_files = hasattr(client, "files")
-            except Exception as e:
-                client_has_files = False
+            client_cls = getattr(anthropic, "Anthropic", None) or getattr(anthropic, "Client", None)
+            if client_cls is not None:
+                try:
+                    client = client_cls(api_key=os.getenv(detected_key))
+                    client_has_files = (
+                        hasattr(client, "files")
+                        or (hasattr(client, "beta") and hasattr(client.beta, "files"))
+                    )
+                except Exception:
+                    client_has_files = False
     except Exception:
         client_has_files = False
 
@@ -661,7 +668,15 @@ async def process_with_claude(
         import anthropic
         print("ANTHROPIC VERSION AT RUNTIME:", getattr(anthropic, "__version__", None))
         print("PYTHON:", sys.executable)
-        print("HAS beta.files.upload:", hasattr(anthropic.Anthropic().beta, "files"))
+        client_cls = getattr(anthropic, "Anthropic", None) or getattr(anthropic, "Client", None)
+        has_beta_files = False
+        if client_cls is not None:
+            try:
+                client_test = client_cls(api_key=os.getenv("CLAUDE_API_KEY") or os.getenv("ANTHROPIC_API_KEY"))
+                has_beta_files = hasattr(client_test, "beta") and hasattr(client_test.beta, "files")
+            except Exception:
+                has_beta_files = False
+        print("HAS beta.files.upload:", has_beta_files)
 
         pipeline = ClaudePipeline()
 
