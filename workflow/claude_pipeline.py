@@ -138,7 +138,6 @@ class ClaudeClientStub:
                 "type": "base64",
                 "media_type": content_type,
                 "data": encoded,
-                "filename": filename,
             },
         }
 
