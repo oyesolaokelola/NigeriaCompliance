@@ -214,7 +214,7 @@ class ClaudeClientStub:
                 resp = self._client.messages.create(
                     model=model,
                     messages=messages,
-                    max_tokens_to_sample=4096,
+                    max_tokens=4096,
                 )
                 return resp
             except Exception as e:
@@ -225,7 +225,7 @@ class ClaudeClientStub:
 
         if hasattr(self._client, "chat") and hasattr(self._client.chat, "completions"):
             try:
-                resp = self._client.chat.completions.create(model=model, messages=messages, max_tokens_to_sample=4096)
+                resp = self._client.chat.completions.create(model=model, messages=messages, max_tokens=4096)
                 return resp
             except Exception as e:
                 last_error = e
@@ -235,7 +235,7 @@ class ClaudeClientStub:
         if hasattr(self._client, "completions"):
             try:
                 prompt_text = self._messages_to_prompt_text(messages)
-                resp = self._client.completions.create(model=model, prompt=prompt_text, max_tokens_to_sample=4096)
+                resp = self._client.completions.create(model=model, prompt=prompt_text, max_tokens=4096)
                 return resp
             except Exception as e:
                 last_error = e
