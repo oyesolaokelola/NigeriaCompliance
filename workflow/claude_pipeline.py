@@ -205,6 +205,7 @@ class ClaudeClientStub:
     def create_message(self, messages: List[Dict[str, Any]], model: Optional[str] = None) -> Dict[str, Any]:
         # Send a chat-like message to Claude and return parsed JSON/text response.
         model = model or os.getenv("CLAUDE_MODEL", "claude-opus-4-8")
+        fallback_model = "claude-opus-4-8"
         last_error = None
         errors = []
 
@@ -221,6 +222,24 @@ class ClaudeClientStub:
                 errors.append(("messages.create", str(e)))
                 logger.warning(f"Anthropic client.messages.create() failed: {e}")
                 logger.warning("Falling back to alternative Anthropic request paths.")
+                # If the failure indicates the model is not available, retry with a known-accessible fallback.
+                try:
+                    err_text = str(e).lower()
+                except Exception:
+                    err_text = ""
+                if "not_found" in err_text or "model" in err_text and "not found" in err_text or "model:" in err_text:
+                    logger.warning(f"Model '{model}' appears unavailable. Retrying with fallback model '{fallback_model}'.")
+                    try:
+                        resp = self._client.messages.create(
+                            model=fallback_model,
+                            messages=messages,
+                            max_tokens=4096,
+                        )
+                        return resp
+                    except Exception as e2:
+                        last_error = e2
+                        errors.append(("messages.create.fallback", str(e2)))
+                        logger.warning(f"Fallback Anthropic messages.create() also failed: {e2}")
 
         if hasattr(self._client, "chat") and hasattr(self._client.chat, "completions"):
             try:
