@@ -307,12 +307,24 @@ class ClaudePipeline:
             # Best-effort: return raw text under key 'raw'
             return {"raw": text}
 
-    def extract_and_interpret(self, dept_file_bytes_list: List[bytes], filenames: List[str], template_structure: Dict[str, Any] = None) -> Dict[str, Any]:
+    def extract_and_interpret(
+        self,
+        dept_file_bytes_list: List[bytes],
+        filenames: List[str],
+        template_structure: Dict[str, Any] = None,
+        template_branding: Dict[str, Any] = None,
+    ) -> Dict[str, Any]:
         content = []
         for b, name in zip(dept_file_bytes_list, filenames):
             content.append(self.client.build_document_source(b, name))
 
-        content.append({"type": "text", "text": f"Template structure: {json.dumps(template_structure or {})}\n\nExtract metrics, period, department, and return JSON."})
+        prompt_text = (
+            f"Template structure: {json.dumps(template_structure or {})}\n"
+            f"Template branding: {json.dumps(template_branding or {})}\n\n"
+            "Extract metrics, period, department, and return JSON. "
+            "Apply the template structure and branding to the generated report output when available."
+        )
+        content.append({"type": "text", "text": prompt_text})
 
         prompt = {"role": "user", "content": content}
         resp = self.client.create_message([prompt])

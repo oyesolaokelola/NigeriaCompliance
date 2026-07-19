@@ -708,7 +708,12 @@ async def process_with_claude(
             dept_bytes.append(b)
             filenames.append(f.filename)
 
-        extraction = pipeline.extract_and_interpret(dept_bytes, filenames, template_structure=template_analysis.get("structure"))
+        extraction = pipeline.extract_and_interpret(
+            dept_bytes,
+            filenames,
+            template_structure=template_analysis.get("structure"),
+            template_branding=template_analysis.get("branding"),
+        )
 
         # Build a single record or list to aggregate
         records = []
