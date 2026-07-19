@@ -727,6 +727,9 @@ async def process_with_claude(
         charts = create_summary_charts(aggregated, output_dir, template_profile=template_profile)
 
         narrative = extraction.get("narrative") if isinstance(extraction, dict) else ""
+        # Ensure narrative is always a string to avoid NoneType.replace errors
+        if narrative is None:
+            narrative = ""
         html_path = generate_html_report(
             aggregated,
             status,
