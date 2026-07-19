@@ -664,6 +664,9 @@ async def process_with_claude(
     - `department_docs` is a list of uploaded department files.
     - `mode` controls template usage: structure_only, structure_and_branding, branding_only
     """
+    if mode not in ["structure_only", "structure_and_branding", "branding_only"]:
+        raise HTTPException(status_code=400, detail="mode must be one of: structure_only, structure_and_branding, branding_only")
+
     try:
         import anthropic
         print("ANTHROPIC VERSION AT RUNTIME:", getattr(anthropic, "__version__", None))

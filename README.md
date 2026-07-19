@@ -46,23 +46,23 @@ You can control which Claude model the pipeline uses via an environment variable
 
 Behavior:
 - If `CLAUDE_MODEL` is set, the code will use that model string when calling Claude.
-- If `CLAUDE_MODEL` is not set, the pipeline falls back to `claude-2` (safe default).
+- If `CLAUDE_MODEL` is not set, the pipeline falls back to `claude-opus-4-8` (recommended for this key).
 
 Recommended values:
-- `claude-2` — default/fallback; stable and generally capable for structured extraction and template analysis.
-- `claude-opus-4-1` — higher-capability model; recommended for complex documents, detailed visual/template interpretation, or when higher accuracy is required.
-- `claude-3-5-sonnet` — lower-cost option suitable for simpler documents and bulk processing when budgets are constrained.
+- `claude-opus-4-8` — default/fallback for this deployment and known-accessible with the current key.
+- `claude-opus-4-7` — another strong option for rich document understanding.
+- `claude-sonnet-5` — lower-cost, general-purpose Claude model.
 
 How to set in Railway / Vercel (example):
 1. In your Railway project, go to Settings → Variables and add `CLAUDE_API_KEY` and `CLAUDE_MODEL`.
 2. Example values:
 	- `CLAUDE_API_KEY`: "sk-..." (your Claude API key)
-	- `CLAUDE_MODEL`: `claude-opus-4-1`
+	- `CLAUDE_MODEL`: `claude-opus-4-8`
 
 PowerShell example (local):
 ```powershell
 $env:CLAUDE_API_KEY = "your_claude_api_key_here"
-$env:CLAUDE_MODEL = "claude-opus-4-1"  # optional
+$env:CLAUDE_MODEL = "claude-opus-4-8"  # optional
 ```
 
 Notes and best practices:

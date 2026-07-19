@@ -143,13 +143,36 @@ class ClaudeClientStub:
         }
 
     def build_document_source(self, file_bytes: bytes, filename: str, content_type: str = "application/pdf") -> Dict[str, Any]:
-        if self._has_files_api:
-            try:
-                file_id = self.upload_file(file_bytes, filename, content_type)
-                return {"type": "document", "source": {"type": "file", "file_id": file_id}}
-            except Exception:
-                logger.warning("File upload failed in Anthropic client; falling back to inline base64 document source.")
-        return self._build_inline_document_source(file_bytes, filename, content_type)
+        # Use inline base64-encoded document sources for messages to avoid
+        # mismatches in expected 'source' tags across Anthropic SDK versions.
+        # Uploading via the Files API can still be done with `upload_file()` when
+        # needed, but messages typically expect base64/content/text/url tags.
+        try:
+            return self._build_inline_document_source(file_bytes, filename, content_type)
+        except Exception:
+            logger.exception("Failed to build inline document source; falling back to minimal text source.")
+            return {"type": "text", "text": f"(file: {filename})"}
+
+    def _messages_to_prompt_text(self, messages: List[Dict[str, Any]]) -> str:
+        if not messages:
+            return ""
+        lines = []
+        for message in messages:
+            if not isinstance(message, dict):
+                lines.append(str(message))
+                continue
+            role = message.get("role") or message.get("type") or "user"
+            content = message.get("content") or message.get("text") or ""
+            if isinstance(content, list):
+                pieces = []
+                for item in content:
+                    if isinstance(item, dict):
+                        pieces.append(item.get("text", json.dumps(item)))
+                    else:
+                        pieces.append(str(item))
+                content = "\n".join(pieces)
+            lines.append(f"{role}: {content}")
+        return "\n\n".join(lines)
 
     def _extract_text_from_response(self, response: Any) -> str:
         if response is None:
@@ -182,21 +205,23 @@ class ClaudeClientStub:
 
     def create_message(self, messages: List[Dict[str, Any]], model: Optional[str] = None) -> Dict[str, Any]:
         # Send a chat-like message to Claude and return parsed JSON/text response.
-        model = model or os.getenv("CLAUDE_MODEL", "claude-opus-4-1")
+        model = model or os.getenv("CLAUDE_MODEL", "claude-opus-4-8")
         last_error = None
+        errors = []
 
         if hasattr(self._client, "messages"):
             try:
                 resp = self._client.messages.create(
                     model=model,
                     messages=messages,
-                    max_tokens=4096
+                    max_tokens=4096,
                 )
                 return resp
             except Exception as e:
                 last_error = e
+                errors.append(("messages.create", str(e)))
                 logger.warning(f"Anthropic client.messages.create() failed: {e}")
-                logger.warning("Falling back to alternative message APIs.")
+                logger.warning("Falling back to alternative Anthropic request paths.")
 
         if hasattr(self._client, "chat") and hasattr(self._client.chat, "completions"):
             try:
@@ -204,18 +229,22 @@ class ClaudeClientStub:
                 return resp
             except Exception as e:
                 last_error = e
-                logger.warning("Anthropic client.chat.completions.create() failed, falling back to alternative message APIs.")
+                errors.append(("chat.completions.create", str(e)))
+                logger.warning("Anthropic client.chat.completions.create() failed, falling back to alternative Anthropic request paths.")
 
         if hasattr(self._client, "completions"):
             try:
-                resp = self._client.completions.create(model=model, prompt=messages)
+                prompt_text = self._messages_to_prompt_text(messages)
+                resp = self._client.completions.create(model=model, prompt=prompt_text, max_tokens=4096)
                 return resp
             except Exception as e:
                 last_error = e
-                logger.warning("Anthropic client.completions.create() failed.")
+                errors.append(("completions.create", str(e)))
+                logger.warning(f"Anthropic client.completions.create() failed: {e}")
 
+        error_details = "; ".join([f"{name}: {msg}" for name, msg in errors])
         raise RuntimeError(
-            "Unable to send Claude message: no compatible Anthropic chat API was found or all attempts failed."
+            f"Unable to send Claude message through Anthropic. Tried {len(errors)} methods. Last error: {last_error}. Details: {error_details}"
         ) from last_error
 
 
