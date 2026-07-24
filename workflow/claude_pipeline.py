@@ -195,9 +195,22 @@ class ClaudeClientStub:
         if hasattr(response, "message"):
             return self._extract_text_from_response(getattr(response.message, "content", None))
         if hasattr(response, "content"):
-            return self._extract_text_from_response(getattr(response, "content"))
+            content = getattr(response, "content")
+            # Claude SDK returns content as a list of TextBlock objects
+            if isinstance(content, list) and content:
+                for item in content:
+                    if hasattr(item, "text"):
+                        return getattr(item, "text")
+                    if isinstance(item, dict) and "text" in item:
+                        return item["text"]
+            # If content is a string, return it directly
+            if isinstance(content, str):
+                return content
+            return self._extract_text_from_response(content)
         if isinstance(response, list) and response:
             first = response[0]
+            if hasattr(first, "text"):
+                return getattr(first, "text")
             if isinstance(first, dict):
                 return first.get("text") or first.get("content") or json.dumps(first)
         return str(response)
@@ -298,11 +311,17 @@ class ClaudePipeline:
 
         resp = self.client.create_message([prompt])
         # Attempt to parse JSON from the response content
-        try:
-            # SDK response parsing may vary; try common paths
-            text = getattr(resp, "choices", [])[0].message.content if hasattr(resp, "choices") else str(resp)
-        except Exception:
-            text = str(resp)
+        text = self.client._extract_text_from_response(resp)
+        
+        # Strip markdown code fence if present (Claude often wraps JSON in ```json ... ```)
+        text = text.strip()
+        if text.startswith("```json"):
+            text = text[7:]  # Remove ```json
+        if text.startswith("```"):
+            text = text[3:]  # Remove ```
+        if text.endswith("```"):
+            text = text[:-3]  # Remove trailing ```
+        text = text.strip()
 
         # Fallback: try to extract JSON substring
         try:
@@ -336,10 +355,17 @@ class ClaudePipeline:
         prompt = {"role": "user", "content": content}
         resp = self.client.create_message([prompt])
 
-        try:
-            text = getattr(resp, "choices", [])[0].message.content if hasattr(resp, "choices") else str(resp)
-        except Exception:
-            text = str(resp)
+        text = self.client._extract_text_from_response(resp)
+        
+        # Strip markdown code fence if present (Claude often wraps JSON in ```json ... ```)
+        text = text.strip()
+        if text.startswith("```json"):
+            text = text[7:]  # Remove ```json
+        if text.startswith("```"):
+            text = text[3:]  # Remove ```
+        if text.endswith("```"):
+            text = text[:-3]  # Remove trailing ```
+        text = text.strip()
 
         try:
             return json.loads(text)
