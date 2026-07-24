@@ -11,7 +11,7 @@ from reportlab.lib.units import inch
 from reportlab.lib.colors import HexColor
 
 
-def create_summary_charts(aggregated: Dict[str, Any], output_dir: Path, template_profile: Optional[Any] = None) -> Dict[str, Path]:
+def create_summary_charts(aggregated: Dict[str, Any], output_dir: Path, template_profile: Optional[Any] = None, template_analysis: Optional[Dict[str, Any]] = None) -> Dict[str, Path]:
     charts: Dict[str, Path] = {}
 
     m = aggregated["metrics"]
@@ -38,6 +38,15 @@ def create_summary_charts(aggregated: Dict[str, Any], output_dir: Path, template
             bar_color = None
     else:
         bar_color = None
+
+    # Override with extracted template_analysis branding if available
+    if template_analysis and template_analysis.get("branding"):
+        branding = template_analysis["branding"]
+        if branding.get("primary_color"):
+            title_color = branding["primary_color"]
+        if branding.get("secondary_color"):
+            label_color = branding["secondary_color"]
+        bar_color = title_color
 
     if rev and payroll:
         chart_path = output_dir / "Summary_Revenue_vs_Payroll.png"
@@ -80,6 +89,7 @@ def generate_html_report(
     narrative: str,
     output_dir: Path,
     template_profile: Optional[Any] = None,
+    template_analysis: Optional[Dict[str, Any]] = None,
 ) -> Path:
     path = output_dir / "Financial_Compliance_Report_Q1_2025.html"
 
@@ -104,6 +114,23 @@ def generate_html_report(
                 dest_logo = output_dir / logo_path.name
                 shutil.copy(logo_path, dest_logo)
                 logo_src = dest_logo.name
+
+    # Override with extracted template_analysis branding if available (takes priority)
+    if template_analysis and template_analysis.get("branding"):
+        branding = template_analysis["branding"]
+        if branding.get("primary_color"):
+            title_color = branding["primary_color"]
+        if branding.get("secondary_color"):
+            heading_color = branding["secondary_color"]
+        if branding.get("body_color"):
+            body_color = branding["body_color"]
+        if branding.get("fonts") and isinstance(branding["fonts"], dict):
+            if branding["fonts"].get("body"):
+                font_family = branding["fonts"]["body"]
+            if branding["fonts"].get("heading"):
+                heading_font_family = branding["fonts"]["heading"]
+        if branding.get("logo"):
+            logo_src = branding["logo"]
 
     finance = aggregated["departmental"].get("Finance", {}).get("metrics", {})
     procurement = aggregated["departmental"].get("Procurement", {}).get("metrics", {})

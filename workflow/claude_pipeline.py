@@ -285,8 +285,12 @@ class ClaudePipeline:
                     "type": "text",
                     "text": (
                         f"Mode: {mode}\n\n"
-                        "Extract template structure (sections, field names) and/or branding "
-                        "(fonts, colors, logos, letterhead). Return JSON only."
+                        "Analyze this template document and extract:\n"
+                        "- Structure: section names, field order, headings, layout\n"
+                        "- Branding: font names, colors (hex), logos, letterhead, header/footer text, spacing\n\n"
+                        "Return ONLY valid JSON with structure like:\n"
+                        '{"structure": {"sections": [...], "fields": [...]}, "branding": {"primary_color": "#...", "fonts": {...}, "logo": "...", "letterhead": "..."}\n'
+                        "Do not include any explanation, only the JSON object."
                     ),
                 },
             ],
@@ -319,10 +323,13 @@ class ClaudePipeline:
             content.append(self.client.build_document_source(b, name))
 
         prompt_text = (
-            f"Template structure: {json.dumps(template_structure or {})}\n"
-            f"Template branding: {json.dumps(template_branding or {})}\n\n"
-            "Extract metrics, period, department, and return JSON. "
-            "Apply the template structure and branding to the generated report output when available."
+            "You are a compliance report analyst. Extract data from the uploaded department documents.\n\n"
+            f"Template structure to follow: {json.dumps(template_structure or {})}\n"
+            f"Template branding guidelines: {json.dumps(template_branding or {})}\n\n"
+            "Return ONLY valid JSON with this structure:\n"
+            '{"department": "...", "period": "...", "metrics": {...}, "narrative": "...", "formatting_notes": "How to apply the template structure/branding to this data"}\n'
+            "Include formatting_notes describing how the extracted template structure and branding should be applied to the generated report.\n"
+            "Do not include explanation, only the JSON object."
         )
         content.append({"type": "text", "text": prompt_text})
 

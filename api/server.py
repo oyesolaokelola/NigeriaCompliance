@@ -687,6 +687,8 @@ async def process_with_claude(
         template_profile = None
         template_bytes = None
         template_name = None
+        template_analysis = {"structure": {}, "branding": {}}
+        
         if template_file:
             template_bytes = await template_file.read()
             template_name = template_file.filename
@@ -695,10 +697,8 @@ async def process_with_claude(
             # Use active template if any
             active = PROCESS_STATUS.get("active_template")
             template_profile = template_manager.get_template_or_default(active)
-            if active:
+            if active and template_profile:
                 template_analysis = {"structure": {}, "branding": {"template_name": template_profile.template_name}}
-            else:
-                template_analysis = {"structure": {}, "branding": {}}
 
         # Read department docs
         dept_bytes = []
@@ -729,7 +729,7 @@ async def process_with_claude(
 
         # Create summary charts and a simple HTML narrative using Claude's interpretation if present
         output_dir = OUTPUT_DIR
-        charts = create_summary_charts(aggregated, output_dir, template_profile=template_profile)
+        charts = create_summary_charts(aggregated, output_dir, template_profile=template_profile, template_analysis=template_analysis)
 
         narrative = extraction.get("narrative") if isinstance(extraction, dict) else ""
         # Ensure narrative is always a string to avoid NoneType.replace errors
@@ -743,6 +743,7 @@ async def process_with_claude(
             narrative,
             output_dir,
             template_profile=template_profile,
+            template_analysis=template_analysis,
         )
 
         # Save aggregated data
