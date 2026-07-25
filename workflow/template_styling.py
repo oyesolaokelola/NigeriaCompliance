@@ -456,14 +456,19 @@ class TemplateExtractor:
                     docx_path = self.converter.convert_pdf_to_docx(path)
                     logger.info(f"Using converted DOCX for enhanced extraction: {docx_path}")
                     profile = self.extract_from_docx(docx_path)
-                    # Update template path to point to the original PDF
-                    profile.template_path = str(path)
+                    # Keep the converted DOCX as the canonical template path so
+                    # downstream generators load the full document (including
+                    # header/footer images and layout) when producing outputs.
+                    profile.template_path = str(docx_path)
+                    # Record original PDF path for reference
+                    profile.template_insights.setdefault('source_pdf', str(path))
                     return profile
                 except ImportError:
                     logger.warning("pdf2docx not available, using fallback conversion")
                     docx_path = self.converter.convert_pdf_to_docx_fallback(path)
                     profile = self.extract_from_docx(docx_path)
-                    profile.template_path = str(path)
+                    profile.template_path = str(docx_path)
+                    profile.template_insights.setdefault('source_pdf', str(path))
                     return profile
                 except Exception as e:
                     logger.warning(f"PDF conversion failed, using basic PDF extraction: {e}")
