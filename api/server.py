@@ -692,13 +692,35 @@ async def process_with_claude(
         if template_file:
             template_bytes = await template_file.read()
             template_name = template_file.filename
+            template_filename = template_name or "template"
+            if not Path(template_filename).suffix:
+                template_filename += ".pdf" if template_file.content_type and "pdf" in template_file.content_type.lower() else ".docx"
+            saved_template_path = TEMPLATES_DIR / f"{uuid.uuid4().hex}_{template_filename}"
+            with open(saved_template_path, "wb") as f:
+                f.write(template_bytes)
+            template_profile = template_manager.register_template(str(saved_template_path), Path(template_filename).stem)
             template_analysis = pipeline.analyze_template(template_bytes, template_name, mode=mode)
         else:
             # Use active template if any
             active = PROCESS_STATUS.get("active_template")
             template_profile = template_manager.get_template_or_default(active)
             if active and template_profile:
-                template_analysis = {"structure": {}, "branding": {"template_name": template_profile.template_name}}
+                template_analysis = {
+                    "structure": {},
+                    "branding": {
+                        "template_name": template_profile.template_name,
+                        "header_text": template_profile.header_content,
+                        "footer_text": template_profile.footer_content,
+                        "logo_path": template_profile.logo_path,
+                    },
+                }
+
+        branding = template_analysis.setdefault("branding", {})
+        if template_profile:
+            branding.setdefault("header_text", template_profile.header_content)
+            branding.setdefault("letterhead", template_profile.header_content)
+            branding.setdefault("footer_text", template_profile.footer_content)
+            branding.setdefault("logo_path", template_profile.logo_path)
 
         # Read department docs
         dept_bytes = []

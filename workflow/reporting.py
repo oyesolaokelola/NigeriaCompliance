@@ -11,6 +11,99 @@ from reportlab.lib.units import inch
 from reportlab.lib.colors import HexColor
 
 
+def _resolve_branding(template_profile: Optional[Any] = None, template_analysis: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Merge branding from the extracted profile and Claude analysis without hard-coding a specific template."""
+    branding: Dict[str, Any] = {
+        "font_family": "Arial, sans-serif",
+        "title_font_family": "Arial, sans-serif",
+        "heading_font_family": "Arial, sans-serif",
+        "title_color": "#000000",
+        "heading_color": "#333333",
+        "body_color": "#000000",
+        "logo_src": None,
+        "header_text": None,
+        "footer_text": None,
+    }
+
+    if template_profile:
+        if template_profile.body_font and template_profile.body_font.name:
+            branding["font_family"] = template_profile.body_font.name
+        if template_profile.title_font and template_profile.title_font.name:
+            branding["title_font_family"] = template_profile.title_font.name
+        if template_profile.heading_font and template_profile.heading_font.name:
+            branding["heading_font_family"] = template_profile.heading_font.name
+        if template_profile.color_scheme:
+            branding["title_color"] = f"#{template_profile.color_scheme.get('primary', '000000')}"
+            branding["heading_color"] = f"#{template_profile.color_scheme.get('secondary', '333333')}"
+            branding["body_color"] = f"#{template_profile.color_scheme.get('body', '000000')}"
+        branding["header_text"] = template_profile.header_content or branding["header_text"]
+        branding["footer_text"] = template_profile.footer_content or branding["footer_text"]
+        if template_profile.logo_path:
+            logo_path = Path(template_profile.logo_path)
+            if logo_path.exists():
+                branding["logo_src"] = logo_path
+
+    if template_analysis and template_analysis.get("branding"):
+        analysis = template_analysis["branding"]
+        if analysis.get("fonts") and isinstance(analysis["fonts"], dict):
+            if analysis["fonts"].get("body"):
+                branding["font_family"] = analysis["fonts"]["body"]
+            if analysis["fonts"].get("heading"):
+                branding["heading_font_family"] = analysis["fonts"]["heading"]
+        if analysis.get("primary_color"):
+            branding["title_color"] = analysis["primary_color"]
+        if analysis.get("secondary_color"):
+            branding["heading_color"] = analysis["secondary_color"]
+        if analysis.get("body_color"):
+            branding["body_color"] = analysis["body_color"]
+        branding["header_text"] = analysis.get("header_text") or analysis.get("letterhead") or branding["header_text"]
+        branding["footer_text"] = analysis.get("footer_text") or branding["footer_text"]
+        logo_value = analysis.get("logo") or analysis.get("logo_path")
+        if isinstance(logo_value, str) and Path(logo_value).exists():
+            branding["logo_src"] = Path(logo_value)
+        elif isinstance(logo_value, str) and not branding["header_text"]:
+            branding["header_text"] = logo_value
+
+    return branding
+
+
+def _as_rgb(color_value: str):
+    try:
+        normalized = color_value.lstrip("#")
+        return tuple(int(normalized[i:i+2], 16) / 255 for i in (0, 2, 4))
+    except Exception:
+        return (0, 0, 0)
+
+
+def _resolve_report_heading(template_profile: Optional[Any] = None, template_analysis: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    """Resolve a template-specific title and subtitle without hard-coded brand text."""
+    title = None
+    subtitle = None
+
+    if template_analysis and template_analysis.get("structure"):
+        for section in template_analysis["structure"].get("sections", []):
+            section_name = str(section.get("name", "")).strip().lower()
+            content = section.get("content") or []
+            combined = " ".join(str(item).strip() for item in content if str(item).strip())
+            if section_name == "report title" and combined:
+                title = combined
+            elif section_name in {"header/letterhead", "letterhead", "header"} and combined and not subtitle:
+                subtitle = combined
+
+    if not title and template_profile:
+        title = (template_profile.template_insights or {}).get("report_title")
+        if not title and template_profile.header_content:
+            title = template_profile.header_content.splitlines()[-1].strip()
+
+    if not subtitle and template_profile:
+        subtitle = template_profile.footer_content or (template_profile.template_insights or {}).get("subtitle")
+
+    return {
+        "title": title or "Compliance Report",
+        "subtitle": subtitle or "Financial compliance summary",
+    }
+
+
 def create_summary_charts(aggregated: Dict[str, Any], output_dir: Path, template_profile: Optional[Any] = None, template_analysis: Optional[Dict[str, Any]] = None) -> Dict[str, Path]:
     charts: Dict[str, Path] = {}
 
@@ -92,45 +185,25 @@ def generate_html_report(
     template_analysis: Optional[Dict[str, Any]] = None,
 ) -> Path:
     path = output_dir / "Financial_Compliance_Report_Q1_2025.html"
-
-    font_family = "Arial, sans-serif"
-    title_font_family = "Arial, sans-serif"
-    heading_font_family = "Arial, sans-serif"
-    title_color = "#000000"
-    heading_color = "#333333"
-    body_color = "#000000"
+    branding = _resolve_branding(template_profile, template_analysis)
+    heading = _resolve_report_heading(template_profile, template_analysis)
+    font_family = branding["font_family"]
+    title_font_family = branding["title_font_family"]
+    heading_font_family = branding["heading_font_family"]
+    title_color = branding["title_color"]
+    heading_color = branding["heading_color"]
+    body_color = branding["body_color"]
     logo_src = None
+    if isinstance(branding["logo_src"], Path):
+        logo_path = branding["logo_src"]
+        dest_logo = output_dir / logo_path.name
+        if logo_path.exists():
+            shutil.copy(logo_path, dest_logo)
+            logo_src = dest_logo.name
+    elif isinstance(branding["logo_src"], str):
+        logo_src = branding["logo_src"]
 
-    if template_profile:
-        if template_profile.body_font and template_profile.body_font.name:
-            font_family = template_profile.body_font.name
-        if template_profile.color_scheme:
-            title_color = f"#{template_profile.color_scheme.get('primary', '000000')}"
-            heading_color = f"#{template_profile.color_scheme.get('secondary', '333333')}"
-            body_color = f"#{template_profile.color_scheme.get('body', '000000')}"
-        if template_profile.logo_path:
-            logo_path = Path(template_profile.logo_path)
-            if logo_path.exists():
-                dest_logo = output_dir / logo_path.name
-                shutil.copy(logo_path, dest_logo)
-                logo_src = dest_logo.name
-
-    # Override with extracted template_analysis branding if available (takes priority)
-    if template_analysis and template_analysis.get("branding"):
-        branding = template_analysis["branding"]
-        if branding.get("primary_color"):
-            title_color = branding["primary_color"]
-        if branding.get("secondary_color"):
-            heading_color = branding["secondary_color"]
-        if branding.get("body_color"):
-            body_color = branding["body_color"]
-        if branding.get("fonts") and isinstance(branding["fonts"], dict):
-            if branding["fonts"].get("body"):
-                font_family = branding["fonts"]["body"]
-            if branding["fonts"].get("heading"):
-                heading_font_family = branding["fonts"]["heading"]
-        if branding.get("logo"):
-            logo_src = branding["logo"]
+    banner_text = branding["header_text"]
 
     finance = aggregated["departmental"].get("Finance", {}).get("metrics", {})
     procurement = aggregated["departmental"].get("Procurement", {}).get("metrics", {})
@@ -147,18 +220,33 @@ def generate_html_report(
         f.write("h1 { font-family: %s; font-size: 2.2em; color: %s; margin-bottom: 0.2em; }" % (title_font_family, title_color))
         f.write("h2 { font-family: %s; font-size: 1.5em; color: %s; margin-top: 1.2em; }" % (heading_font_family, heading_color))
         f.write("h3, h4 { font-family: %s; color: %s; margin-top: 1.2em; }" % (heading_font_family, heading_color))
+        f.write(".letterhead { background: %s; color: %s; padding: 18px 20px; margin-bottom: 18px; }" % (title_color, branding.get('secondary_color', '#FFFFFF')))
+        f.write(".letterhead .brand { font-size: 1.35em; font-weight: 700; line-height: 1.1; }")
+        f.write(".letterhead .subtitle { font-size: 1em; opacity: 0.95; margin-top: 4px; }")
         f.write("table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }")
         f.write("table td, table th { border: 1px solid #ccc; padding: 8px; }")
         f.write("img.logo { max-width: 200px; margin-bottom: 16px; }")
         f.write(".report-header { margin-bottom: 16px; color: %s; }" % body_color)
         f.write(".report-footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid #ddd; color: %s; font-size: 0.9em; }" % body_color)
         f.write("</style></head><body>")
+        if banner_text:
+            brand_lines = [line.strip() for line in str(banner_text).splitlines() if line.strip()]
+            if brand_lines:
+                f.write("<div class='letterhead'>")
+                f.write(f"<div class='brand'>{brand_lines[0]}</div>")
+                if len(brand_lines) > 1:
+                    f.write(f"<div class='subtitle'>{' '.join(brand_lines[1:])}</div>")
+                f.write("</div>")
         if logo_src:
             f.write(f'<img class="logo" src="{logo_src}" alt="Logo">')
-        if template_profile and getattr(template_profile, 'header_content', None):
+        elif template_analysis and template_analysis.get("branding", {}).get("logo"):
+            logo_text = template_analysis["branding"]["logo"]
+            if isinstance(logo_text, str):
+                f.write(f'<div class="report-header">{logo_text}</div>')
+        if template_profile and getattr(template_profile, 'header_content', None) and not banner_text:
             f.write(f'<div class="report-header">{template_profile.header_content}</div>')
-        f.write("<h1>Northbridge Holdings Ltd</h1>")
-        f.write("<h2>Financial Compliance Report – Q1 2025</h2>")
+        f.write(f"<h1>{heading['title']}</h1>")
+        f.write(f"<h2>{heading['subtitle']}</h2>")
 
         f.write("<h3>Section 1: Executive Summary</h3>")
         f.write(f"<p><strong>Compliance Status:</strong> {status}</p>")
@@ -217,6 +305,7 @@ def generate_pdf_report(
     narrative: str,
     output_dir: Path,
     template_profile: Optional[Any] = None,
+    template_analysis: Optional[Dict[str, Any]] = None,
 ) -> Path:
     """
     PDF template version of the same report structure with optional custom styling.
@@ -252,6 +341,15 @@ def generate_pdf_report(
     body_color = (0, 0, 0)
     line_spacing = 1.2
     logo_path = None
+    banner_text = None
+    banner_fill = (0, 0, 0)
+    banner_text_color = (1, 1, 1)
+
+    branding = _resolve_branding(template_profile, template_analysis)
+    heading = _resolve_report_heading(template_profile, template_analysis)
+    banner_text = branding.get("header_text")
+    banner_fill = _as_rgb(branding.get("title_color", "#000000"))
+    banner_text_color = _as_rgb(branding.get("heading_color", "#FFFFFF")) if branding.get("heading_color") else (1, 1, 1)
 
     if template_profile:
         title_font = _map_pdf_font_name(template_profile.title_font.name) if getattr(template_profile, 'title_font', None) else title_font
@@ -284,6 +382,10 @@ def generate_pdf_report(
                 logo_path = logo_dest
             else:
                 logo_path = None
+    elif template_analysis:
+        title_color = _as_rgb(branding.get("title_color", "#000000"))
+        heading_color = _as_rgb(branding.get("heading_color", "#000000"))
+        body_color = _as_rgb(branding.get("body_color", "#000000"))
 
     # Calculate margins
     left_margin = 50
@@ -293,6 +395,21 @@ def generate_pdf_report(
         right_margin = template_profile.margin_right / 20 if template_profile.margin_right else 50
     
     y = height - 40
+
+    # Letterhead banner
+    if banner_text:
+        banner_lines = [line.strip() for line in str(banner_text).splitlines() if line.strip()]
+        if banner_lines:
+            banner_height = min(70, 18 + 16 * len(banner_lines))
+            c.setFillColorRGB(*banner_fill)
+            c.rect(left_margin, y - banner_height + 8, width - left_margin - right_margin, banner_height, fill=1, stroke=0)
+            c.setFillColorRGB(*banner_text_color)
+            c.setFont(title_font, max(title_size, 11))
+            text_y = y - 16
+            for idx, line in enumerate(banner_lines[:3]):
+                c.drawString(left_margin + 12, text_y, line[:120])
+                text_y -= 16 if idx == 0 else 14
+            y -= banner_height + 10
     
     # Logo
     if logo_path and logo_path.exists():
@@ -315,12 +432,12 @@ def generate_pdf_report(
     # Title
     c.setFont(title_font, title_size)
     c.setFillColorRGB(*title_color)
-    c.drawString(left_margin, y, "Northbridge Holdings Ltd")
+    c.drawString(left_margin, y, heading["title"][:120])
     y -= max(24, title_size + 4)
     
     # Subtitle
     c.setFont(heading_font, heading_size)
-    c.drawString(left_margin, y, "Financial Compliance Report – Q1 2025")
+    c.drawString(left_margin, y, heading["subtitle"][:120])
     y -= max(28, heading_size + 6)
 
     # Status
