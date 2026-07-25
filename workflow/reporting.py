@@ -144,6 +144,21 @@ def _format_metric(value: Any) -> str:
     return str(value)
 
 
+def _looks_like_placeholder(text: str) -> bool:
+    token = _normalize_token(text)
+    if not token:
+        return True
+    placeholders = [
+        "narrativeparagraph",
+        "describingscope",
+        "field",
+        "example",
+        "placeholder",
+        "layout",
+    ]
+    return any(p in token for p in placeholders)
+
+
 def _resolve_reporting_period(aggregated: Dict[str, Any]) -> str:
     periods = aggregated.get("periods") if isinstance(aggregated, dict) else None
     if isinstance(periods, list) and periods:
@@ -166,10 +181,21 @@ def _collect_template_section_rows(
     global_metrics = aggregated.get("metrics", {}) if isinstance(aggregated, dict) else {}
     departmental = aggregated.get("departmental", {}) if isinstance(aggregated, dict) else {}
 
-    # Include explicit template content first.
+    # Include explicit template content only when it is likely real letterhead/title text,
+    # not instructional placeholders from template analysis.
+    allow_literal_content = section_name in {
+        "header/letterhead",
+        "letterhead",
+        "header",
+        "report title",
+        "footer",
+    }
     for item in section.get("content", []) or []:
-        if str(item).strip():
-            rows.append(str(item).strip())
+        value = str(item).strip()
+        if not value:
+            continue
+        if allow_literal_content or not _looks_like_placeholder(value):
+            rows.append(value)
 
     # Fill declared fields using aggregated metrics where possible.
     for field in section.get("fields", []) or []:
@@ -190,6 +216,10 @@ def _collect_template_section_rows(
         else:
             rows.append("No issues detected.")
 
+    if "note" in section_name:
+        for note in aggregated.get("notes", []) if isinstance(aggregated, dict) else []:
+            rows.append(f"- {note}")
+
     # Departmental subsection support
     subsections = section.get("subsections") or []
     if isinstance(subsections, list) and subsections:
@@ -205,6 +235,20 @@ def _collect_template_section_rows(
                     break
             for field in sub.get("fields", []) or []:
                 rows.append(f"  {field}: {_format_metric(_lookup_metric(dept_metrics, field))}")
+
+    # Last-resort relevance fallback: if a section has no meaningful rows yet,
+    # synthesize context-relevant content from extracted results.
+    if not rows:
+        if "executive summary" in section_name and narrative:
+            rows.append(narrative)
+        elif "metric" in section_name and global_metrics:
+            for key, value in global_metrics.items():
+                rows.append(f"{key}: {_format_metric(value)}")
+        elif "department" in section_name and departmental:
+            for dept_name, dept_payload in departmental.items():
+                rows.append(str(dept_name))
+                for key, value in (dept_payload or {}).get("metrics", {}).items():
+                    rows.append(f"  {key}: {_format_metric(value)}")
 
     return rows
 
