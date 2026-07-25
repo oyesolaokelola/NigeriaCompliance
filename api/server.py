@@ -22,7 +22,13 @@ from workflow.template_styling import TemplateManager
 from workflow.claude_pipeline import ClaudePipeline
 from workflow.aggregation import aggregate_records
 from workflow.compliance import run_compliance_checks
-from workflow.reporting import create_summary_charts, generate_html_report
+from workflow.genai_agents import template_assessment_agent
+from workflow.reporting import (
+    create_summary_charts,
+    generate_html_report,
+    generate_pdf_report,
+    generate_assessment_report,
+)
 
 app = FastAPI(title="NigeriaCompliance POC API")
 
@@ -767,9 +773,34 @@ async def process_with_claude(
             template_profile=template_profile,
             template_analysis=template_analysis,
         )
+        pdf_path = generate_pdf_report(
+            aggregated,
+            status,
+            issues,
+            charts,
+            narrative,
+            output_dir,
+            template_profile=template_profile,
+            template_analysis=template_analysis,
+        )
+
+        # Produce assessment artifacts to align Claude route outputs with full workflow outputs.
+        if template_profile:
+            assessment_text = template_assessment_agent(
+                template_profile,
+                aggregated,
+                status,
+                issues,
+                narrative,
+            )
+            assessment_paths = generate_assessment_report(assessment_text, output_dir, template_profile)
+        else:
+            assessment_text = "Template profile unavailable; assessment generated from aggregated output."
+            assessment_paths = generate_assessment_report(assessment_text, output_dir, None)
 
         # Save aggregated data
-        with open(output_dir / "aggregated_data.json", "w", encoding="utf-8") as f:
+        aggregated_json_path = output_dir / "aggregated_data.json"
+        with open(aggregated_json_path, "w", encoding="utf-8") as f:
             json.dump(aggregated, f, indent=2)
 
         return {
@@ -778,6 +809,12 @@ async def process_with_claude(
             "compliance_status": status,
             "issues": issues,
             "report_path": str(html_path),
+            "html_report": str(html_path),
+            "pdf_report": str(pdf_path),
+            "assessment_html": str(assessment_paths["html"]),
+            "assessment_pdf": str(assessment_paths["pdf"]),
+            "aggregated_json": str(aggregated_json_path),
+            "artifact_list_url": "/artifacts",
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Claude processing failed: {e}")
