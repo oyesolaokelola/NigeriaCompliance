@@ -3,6 +3,8 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 import shutil
 import textwrap
+import re
+from datetime import datetime
 
 import matplotlib.pyplot as plt
 from reportlab.lib.pagesizes import A4, letter
@@ -26,20 +28,28 @@ def _resolve_branding(template_profile: Optional[Any] = None, template_analysis:
     }
 
     if template_profile:
-        if template_profile.body_font and template_profile.body_font.name:
-            branding["font_family"] = template_profile.body_font.name
-        if template_profile.title_font and template_profile.title_font.name:
-            branding["title_font_family"] = template_profile.title_font.name
-        if template_profile.heading_font and template_profile.heading_font.name:
-            branding["heading_font_family"] = template_profile.heading_font.name
-        if template_profile.color_scheme:
-            branding["title_color"] = f"#{template_profile.color_scheme.get('primary', '000000')}"
-            branding["heading_color"] = f"#{template_profile.color_scheme.get('secondary', '333333')}"
-            branding["body_color"] = f"#{template_profile.color_scheme.get('body', '000000')}"
-        branding["header_text"] = template_profile.header_content or branding["header_text"]
-        branding["footer_text"] = template_profile.footer_content or branding["footer_text"]
-        if template_profile.logo_path:
-            logo_path = Path(template_profile.logo_path)
+        body_font = getattr(template_profile, "body_font", None)
+        title_font = getattr(template_profile, "title_font", None)
+        heading_font = getattr(template_profile, "heading_font", None)
+        color_scheme = getattr(template_profile, "color_scheme", None)
+        header_content = getattr(template_profile, "header_content", None)
+        footer_content = getattr(template_profile, "footer_content", None)
+        logo_path_value = getattr(template_profile, "logo_path", None)
+
+        if body_font and getattr(body_font, "name", None):
+            branding["font_family"] = body_font.name
+        if title_font and getattr(title_font, "name", None):
+            branding["title_font_family"] = title_font.name
+        if heading_font and getattr(heading_font, "name", None):
+            branding["heading_font_family"] = heading_font.name
+        if color_scheme:
+            branding["title_color"] = f"#{color_scheme.get('primary', '000000')}"
+            branding["heading_color"] = f"#{color_scheme.get('secondary', '333333')}"
+            branding["body_color"] = f"#{color_scheme.get('body', '000000')}"
+        branding["header_text"] = header_content or branding["header_text"]
+        branding["footer_text"] = footer_content or branding["footer_text"]
+        if logo_path_value:
+            logo_path = Path(logo_path_value)
             if logo_path.exists():
                 branding["logo_src"] = logo_path
 
@@ -91,17 +101,112 @@ def _resolve_report_heading(template_profile: Optional[Any] = None, template_ana
                 subtitle = combined
 
     if not title and template_profile:
-        title = (template_profile.template_insights or {}).get("report_title")
-        if not title and template_profile.header_content:
-            title = template_profile.header_content.splitlines()[-1].strip()
+        template_insights = getattr(template_profile, "template_insights", None) or {}
+        header_content = getattr(template_profile, "header_content", None)
+        title = template_insights.get("report_title")
+        if not title and header_content:
+            title = header_content.splitlines()[-1].strip()
 
     if not subtitle and template_profile:
-        subtitle = template_profile.footer_content or (template_profile.template_insights or {}).get("subtitle")
+        template_insights = getattr(template_profile, "template_insights", None) or {}
+        subtitle = getattr(template_profile, "footer_content", None) or template_insights.get("subtitle")
 
     return {
         "title": title or "Compliance Report",
         "subtitle": subtitle or "Financial compliance summary",
     }
+
+
+def _normalize_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
+def _lookup_metric(metrics: Dict[str, Any], field_name: str):
+    if not isinstance(metrics, dict) or not field_name:
+        return None
+    wanted = _normalize_token(field_name)
+    if not wanted:
+        return None
+    for key, value in metrics.items():
+        norm_key = _normalize_token(key)
+        if norm_key == wanted or wanted in norm_key or norm_key in wanted:
+            return value
+    return None
+
+
+def _format_metric(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    if isinstance(value, float):
+        return f"{value:,.2f}"
+    if isinstance(value, int):
+        return f"{value:,}"
+    return str(value)
+
+
+def _resolve_reporting_period(aggregated: Dict[str, Any]) -> str:
+    periods = aggregated.get("periods") if isinstance(aggregated, dict) else None
+    if isinstance(periods, list) and periods:
+        return ", ".join(str(p) for p in periods if p)
+    if isinstance(periods, str) and periods:
+        return periods
+    return "Unknown"
+
+
+def _collect_template_section_rows(
+    section: Dict[str, Any],
+    aggregated: Dict[str, Any],
+    narrative: str,
+    status: str,
+    issues: List[str],
+) -> List[str]:
+    """Build display rows for a template section without hard-coding one template schema."""
+    rows: List[str] = []
+    section_name = str(section.get("name", "")).strip().lower()
+    global_metrics = aggregated.get("metrics", {}) if isinstance(aggregated, dict) else {}
+    departmental = aggregated.get("departmental", {}) if isinstance(aggregated, dict) else {}
+
+    # Include explicit template content first.
+    for item in section.get("content", []) or []:
+        if str(item).strip():
+            rows.append(str(item).strip())
+
+    # Fill declared fields using aggregated metrics where possible.
+    for field in section.get("fields", []) or []:
+        value = _lookup_metric(global_metrics, field)
+        rows.append(f"{field}: {_format_metric(value)}")
+
+    if "metadata" in section_name:
+        rows.append(f"Report Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
+        rows.append(f"Reporting Period: {_resolve_reporting_period(aggregated)}")
+        rows.append(f"Compliance Status: {status}")
+
+    if "executive summary" in section_name and narrative:
+        rows.append(narrative)
+
+    if "compliance" in section_name and "issue" in section_name:
+        if issues:
+            rows.extend([f"- {issue}" for issue in issues])
+        else:
+            rows.append("No issues detected.")
+
+    # Departmental subsection support
+    subsections = section.get("subsections") or []
+    if isinstance(subsections, list) and subsections:
+        for sub in subsections:
+            sub_name = str(sub.get("name", "")).strip()
+            if not sub_name:
+                continue
+            rows.append(f"{sub_name}")
+            dept_metrics = {}
+            for dept_key, dept_payload in departmental.items():
+                if _normalize_token(dept_key) == _normalize_token(sub_name):
+                    dept_metrics = (dept_payload or {}).get("metrics", {}) if isinstance(dept_payload, dict) else {}
+                    break
+            for field in sub.get("fields", []) or []:
+                rows.append(f"  {field}: {_format_metric(_lookup_metric(dept_metrics, field))}")
+
+    return rows
 
 
 def create_summary_charts(aggregated: Dict[str, Any], output_dir: Path, template_profile: Optional[Any] = None, template_analysis: Optional[Dict[str, Any]] = None) -> Dict[str, Path]:
@@ -205,10 +310,17 @@ def generate_html_report(
 
     banner_text = branding["header_text"]
 
-    finance = aggregated["departmental"].get("Finance", {}).get("metrics", {})
-    procurement = aggregated["departmental"].get("Procurement", {}).get("metrics", {})
-    hr = aggregated["departmental"].get("HR", {}).get("metrics", {})
-    ops = aggregated["departmental"].get("Operations", {}).get("metrics", {})
+    finance = aggregated.get("departmental", {}).get("Finance", {}).get("metrics", {})
+    procurement = aggregated.get("departmental", {}).get("Procurement", {}).get("metrics", {})
+    hr = aggregated.get("departmental", {}).get("HR", {}).get("metrics", {})
+    ops = aggregated.get("departmental", {}).get("Operations", {}).get("metrics", {})
+    template_sections = []
+    if template_analysis and isinstance(template_analysis.get("structure"), dict):
+        template_sections = template_analysis["structure"].get("sections", []) or []
+    if not template_sections and template_profile and getattr(template_profile, "template_insights", None):
+        inferred_headings = template_profile.template_insights.get("headings", [])
+        if inferred_headings:
+            template_sections = [{"name": heading} for heading in inferred_headings[:8] if str(heading).strip()]
 
     def img_tag(p: Optional[Path]) -> str:
         return f'<img src="{p.name}" alt="{p.name}" style="max-width:400px;">' if p else ""
@@ -248,48 +360,79 @@ def generate_html_report(
         f.write(f"<h1>{heading['title']}</h1>")
         f.write(f"<h2>{heading['subtitle']}</h2>")
 
-        f.write("<h3>Section 1: Executive Summary</h3>")
-        f.write(f"<p><strong>Compliance Status:</strong> {status}</p>")
-        f.write(f"<p>{narrative.replace(chr(10), '<br>')}</p>")
+        if template_sections:
+            for idx, section in enumerate(template_sections, start=1):
+                section_name = section.get("name") or f"Section {idx}"
+                f.write(f"<h3>Section {idx}: {section_name}</h3>")
+                rows = _collect_template_section_rows(section, aggregated, narrative, status, issues)
 
-        f.write("<h3>Section 2: Key Metrics (Tables)</h3>")
-
-        def write_table(title: str, metrics: Dict[str, Any]):
-            f.write(f"<h4>{title}</h4>")
-            f.write("<table border='1' cellpadding='4'><tr><th>Metric</th><th>Value</th></tr>")
-            for k, v in metrics.items():
-                if isinstance(v, (int, float)):
-                    val = f"{v:,}"
+                # Heuristic: render as table if it looks like metric rows.
+                metric_rows = [r for r in rows if ":" in r and not r.strip().startswith("-")]
+                if metric_rows and len(metric_rows) >= max(2, len(rows) // 2):
+                    f.write("<table border='1' cellpadding='4'><tr><th>Field</th><th>Value</th></tr>")
+                    for row in metric_rows:
+                        k, v = row.split(":", 1)
+                        f.write(f"<tr><td>{k.strip()}</td><td>{v.strip()}</td></tr>")
+                    f.write("</table>")
+                    extra_rows = [r for r in rows if r not in metric_rows]
+                    for row in extra_rows:
+                        if row.strip().startswith("-"):
+                            f.write(f"<p>{row}</p>")
+                        elif row.strip():
+                            f.write(f"<p>{row}</p>")
                 else:
-                    val = str(v)
-                f.write(f"<tr><td>{k}</td><td>{val}</td></tr>")
-            f.write("</table>")
+                    for row in rows:
+                        if row.strip():
+                            f.write(f"<p>{row}</p>")
 
-        write_table("Finance", finance)
-        write_table("Procurement", procurement)
-        write_table("HR", hr)
-        write_table("Operations", ops)
-
-        f.write("<h3>Section 3: Compliance Issues</h3>")
-        if not issues:
-            f.write("<p>No issues detected.</p>")
+            f.write("<h3>Visual Summaries</h3>")
+            f.write("<div>")
+            f.write(img_tag(charts.get("revenue_vs_payroll")))
+            f.write(img_tag(charts.get("vendor_spend")))
+            f.write("</div>")
         else:
+            f.write("<h3>Section 1: Executive Summary</h3>")
+            f.write(f"<p><strong>Compliance Status:</strong> {status}</p>")
+            f.write(f"<p>{narrative.replace(chr(10), '<br>')}</p>")
+
+            f.write("<h3>Section 2: Key Metrics (Tables)</h3>")
+
+            def write_table(title: str, metrics: Dict[str, Any]):
+                f.write(f"<h4>{title}</h4>")
+                f.write("<table border='1' cellpadding='4'><tr><th>Metric</th><th>Value</th></tr>")
+                for k, v in metrics.items():
+                    if isinstance(v, (int, float)):
+                        val = f"{v:,}"
+                    else:
+                        val = str(v)
+                    f.write(f"<tr><td>{k}</td><td>{val}</td></tr>")
+                f.write("</table>")
+
+            write_table("Finance", finance)
+            write_table("Procurement", procurement)
+            write_table("HR", hr)
+            write_table("Operations", ops)
+
+            f.write("<h3>Section 3: Compliance Issues</h3>")
+            if not issues:
+                f.write("<p>No issues detected.</p>")
+            else:
+                f.write("<ul>")
+                for issue in issues:
+                    f.write(f"<li>{issue}</li>")
+                f.write("</ul>")
+
+            f.write("<h3>Section 4: Visual Summaries (Graphs)</h3>")
+            f.write("<div>")
+            f.write(img_tag(charts.get("revenue_vs_payroll")))
+            f.write(img_tag(charts.get("vendor_spend")))
+            f.write("</div>")
+
+            f.write("<h3>Section 5: Notes</h3>")
             f.write("<ul>")
-            for issue in issues:
-                f.write(f"<li>{issue}</li>")
+            for note in aggregated.get("notes", []):
+                f.write(f"<li>{note}</li>")
             f.write("</ul>")
-
-        f.write("<h3>Section 4: Visual Summaries (Graphs)</h3>")
-        f.write("<div>")
-        f.write(img_tag(charts.get("revenue_vs_payroll")))
-        f.write(img_tag(charts.get("vendor_spend")))
-        f.write("</div>")
-
-        f.write("<h3>Section 5: Notes</h3>")
-        f.write("<ul>")
-        for note in aggregated["notes"]:
-            f.write(f"<li>{note}</li>")
-        f.write("</ul>")
         if template_profile and getattr(template_profile, 'footer_content', None):
             f.write(f'<div class="report-footer">{template_profile.footer_content}</div>')
         f.write("</body></html>")
@@ -440,49 +583,83 @@ def generate_pdf_report(
     c.drawString(left_margin, y, heading["subtitle"][:120])
     y -= max(28, heading_size + 6)
 
-    # Status
-    c.setFont(heading_font, heading_size)
-    c.drawString(left_margin, y, f"Compliance Status: {status}")
-    y -= 20
+    template_sections = []
+    if template_analysis and isinstance(template_analysis.get("structure"), dict):
+        template_sections = template_analysis["structure"].get("sections", []) or []
+    if not template_sections and template_profile and getattr(template_profile, "template_insights", None):
+        inferred_headings = template_profile.template_insights.get("headings", [])
+        if inferred_headings:
+            template_sections = [{"name": heading} for heading in inferred_headings[:8] if str(heading).strip()]
 
-    # Narrative
     c.setFont(body_font, body_size)
     c.setFillColorRGB(*body_color)
     line_height = body_size * line_spacing
-    for line in narrative.splitlines():
-        c.drawString(left_margin, y, line[:110])
-        y -= line_height
-        if y < 80:
-            if template_profile and getattr(template_profile, 'footer_content', None):
-                c.setFont(body_font, max(8, body_size - 1))
-                c.drawString(left_margin, 40, str(template_profile.footer_content)[:100])
-            c.showPage()
-            y = height - 50
+
+    if template_sections:
+        for idx, section in enumerate(template_sections, start=1):
+            c.setFont(heading_font, heading_size)
+            c.setFillColorRGB(*heading_color)
+            c.drawString(left_margin, y, f"Section {idx}: {(section.get('name') or '')[:100]}")
+            y -= 18
             c.setFont(body_font, body_size)
-
-    # Footer content for first page if present
-    if template_profile and getattr(template_profile, 'footer_content', None):
-        c.setFont(body_font, max(8, body_size - 1))
-        c.drawString(left_margin, 40, str(template_profile.footer_content)[:100])
-
-    # New page for charts and issues
-    c.showPage()
-    y = height - 50
-    c.setFont(heading_font, heading_size)
-    c.drawString(left_margin, y, "Compliance Issues")
-    y -= 20
-    c.setFont(body_font, body_size)
-    if not issues:
-        c.drawString(left_margin, y, "No issues detected.")
-        y -= 14
+            c.setFillColorRGB(*body_color)
+            rows = _collect_template_section_rows(section, aggregated, narrative, status, issues)
+            for row in rows:
+                for line in textwrap.wrap(str(row), width=110):
+                    c.drawString(left_margin, y, line[:110])
+                    y -= line_height
+                    if y < 80:
+                        if template_profile and getattr(template_profile, 'footer_content', None):
+                            c.setFont(body_font, max(8, body_size - 1))
+                            c.drawString(left_margin, 40, str(template_profile.footer_content)[:100])
+                        c.showPage()
+                        y = height - 50
+                        c.setFont(body_font, body_size)
+                        c.setFillColorRGB(*body_color)
+            y -= 8
     else:
-        for issue in issues:
-            c.drawString(left_margin, y, f"- {issue[:110]}")
-            y -= 14
+        # Status
+        c.setFont(heading_font, heading_size)
+        c.drawString(left_margin, y, f"Compliance Status: {status}")
+        y -= 20
+
+        # Narrative
+        c.setFont(body_font, body_size)
+        c.setFillColorRGB(*body_color)
+        for line in narrative.splitlines():
+            c.drawString(left_margin, y, line[:110])
+            y -= line_height
             if y < 80:
+                if template_profile and getattr(template_profile, 'footer_content', None):
+                    c.setFont(body_font, max(8, body_size - 1))
+                    c.drawString(left_margin, 40, str(template_profile.footer_content)[:100])
                 c.showPage()
                 y = height - 50
                 c.setFont(body_font, body_size)
+
+        # Footer content for first page if present
+        if template_profile and getattr(template_profile, 'footer_content', None):
+            c.setFont(body_font, max(8, body_size - 1))
+            c.drawString(left_margin, 40, str(template_profile.footer_content)[:100])
+
+        # New page for charts and issues
+        c.showPage()
+        y = height - 50
+        c.setFont(heading_font, heading_size)
+        c.drawString(left_margin, y, "Compliance Issues")
+        y -= 20
+        c.setFont(body_font, body_size)
+        if not issues:
+            c.drawString(left_margin, y, "No issues detected.")
+            y -= 14
+        else:
+            for issue in issues:
+                c.drawString(left_margin, y, f"- {issue[:110]}")
+                y -= 14
+                if y < 80:
+                    c.showPage()
+                    y = height - 50
+                    c.setFont(body_font, body_size)
 
     # Charts
     c.showPage()
